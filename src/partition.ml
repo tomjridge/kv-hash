@@ -91,6 +91,109 @@ module Config = struct
 end
 open Config
 
+(** Interpolate once, then scan. ASSUMES we are using Stdlib.( < > =) etc *)
+module Interpolate(S:sig
+    type k = int
+    type v
+  end) 
+= struct
+  open S
+
+  let find ~(len:int) ~(ks:int->k) ~(vs:int->v) k =
+    let low_k = ks 0 in
+    let high_k = ks (len -1) in
+    match () with 
+    | _ when k < low_k -> None
+    | _ when k > high_k -> None
+    | _ when k = low_k -> Some (vs 0)
+    | _ when k = high_k -> Some (vs (len -1))
+    | _ -> 
+      (* interpolate between low_k and high_k *)
+      let high_low = float_of_int (high_k - low_k) in
+      (* delta is between 0 and 1 *)
+      let delta = float_of_int (k - low_k) /. high_low in
+      let i = int_of_float (delta *. (float_of_int len)) in              
+      (* clip to len-1 *)
+      let i = min (len - 1) i in
+      match k = ks i with
+      | true -> Some (vs i)
+      | false -> 
+        begin
+          let dir = if k < ks i then -1 else +1 in
+          (* scan from i+dir, in steps of dir, until we know we can't find k *)
+          i+dir |> iter_k (fun ~k:kont j -> 
+              (* we can forget about the first and last positions... *)
+              match j >= len-1 || j<= 0 with
+              | true -> None
+              | false -> 
+                let kj = ks j in
+                match k=kj with
+                | true -> Some (vs j)
+                | false -> 
+                  match (k > kj && dir = -1) || (k < kj && dir = 1) with
+                  | true -> None
+                  | false -> kont (j+dir))
+        end
+
+  let _ : len:k -> ks:(k -> k) -> vs:(k -> v) -> k -> v option = find
+end
+
+(* Merge two sorted sequences; ks2 take precedence; perhaps it would
+   be cleaner to actually use sequences *)
+module Merge(S:sig
+    type k
+    type v
+    val ks1 : int -> k
+    val vs1 : int -> v
+    val len1 : int
+    val ks2 : int -> k
+    val vs2 : int -> v
+    val len2: int
+    val set : int -> k -> v -> unit
+  end) = struct
+  open S
+
+  let merge_rest ks vs j i = 
+    (j,i) |> iter_k (fun ~k:kont (j,i) -> 
+        match j >= len1 with 
+        | true -> i (* return the length of the merged result *)
+        | false -> 
+          set i (ks j) (vs j);
+          kont (j+1,i+1))
+
+  let merge () = 
+    (0,0,0) |> iter_k (fun ~k:kont (i1,i2,i) -> 
+        match () with
+        | _ when i1 >= len1 -> merge_rest ks2 vs2 i2 i
+        | _ when i2 >= len2 -> merge_rest ks1 vs1 i1 i
+        | _ -> 
+          let k1,k2 = ks1 i1, ks2 i2 in
+          match k1 < k2 with 
+          | true -> 
+            set i k1 (vs1 i1);
+            kont (i1+1,i2,i+1)
+          | false -> 
+            match k1 = k2 with
+            | true -> 
+              set i k2 (vs2 i2);
+              (* NOTE we drop from ks1 as well *)
+              kont (i1+1,i2+1,i+1)
+            | false -> 
+              assert(k2 < k1);
+              set i k2 (vs2 i2);
+              kont (i1,i2+1,i+1))             
+end
+
+let merge (type k v) ~ks1 ~vs1 ~len1 ~ks2 ~vs2 ~len2 ~set = 
+  let module Merge = Merge(struct 
+      type nonrec k=k 
+      type nonrec v=v 
+      let ks1,vs1,len1,ks2,vs2,len2,set = ks1,vs1,len1,ks2,vs2,len2,set
+    end) 
+  in
+  Merge.merge
+
+
 
 module Int = struct
 
@@ -103,6 +206,12 @@ module Int = struct
 
   include Make(S)
 
+(*
+  let k_lt k1 k2 = compare k1 k2 < 0
+  let k_gt k1 k2 = compare k1 k2 > 0
+  let k_le k1 k2 = compare k1 k2 <= 0
+  let k_eq k1 k2 = compare k1 k2 = 0
+*)
 
   module At_runtime(R:sig 
       val data: (int,int_elt) Mmap.t
@@ -167,11 +276,11 @@ module Int = struct
 
       let _ = assert(max_sorted >= 400)
 
-      let len_sorted () = Bigarray.Array1.get p.part_data 0
+      let len_sorted () = p.part_data.{ 0 }
+
+      let set_len_sorted n = p.part_data.{ 0 } <- n
 
       let sorted = Bigarray.Array1.sub p.part_data 1 (2*max_sorted)
-
-      
       
       let len_unsorted () = Bigarray.Array1.get p.part_data (2*max_sorted +1)
 
@@ -179,13 +288,80 @@ module Int = struct
 
       let unsorted = Bigarray.Array1.sub p.part_data (2*max_sorted + 2) (max_unsorted * 2)
 
+      module U = struct
+        let ks i = unsorted.{ 2*i }[@@inline]
+        let vs i = unsorted.{ 2*i +1 }[@@inline]
+      end
+
+      (*
+      (* Sorted *)
+      module S = struct
+        let ks i = sorted.{ 2*i }[@@inline]
+        let vs i = sorted.{ 2*i +1 }[@@inline]
+      end
+      *)
+
+      (** NOTE assumes there is space to add, ie len_unsorted < max_unsorted *)
       let add_unsorted k v = 
         let x = len_unsorted () in
-        Bigarray.Array1.set unsorted (2*x) k;
-        Bigarray.Array1.set unsorted (2*x +1) v;
+        assert(x < max_unsorted);
+        unsorted.{ 2*x } <- k;
+        unsorted.{ 2*x +1 } <- v;
         set_len_unsorted (x+1);
         ()
 
+      module Interpolate = Interpolate(struct type k = int type v = int end)
+          
+      let find_sorted k = 
+        Interpolate.find 
+          ~len:(len_sorted())
+          ~ks:(fun i -> sorted.{2*i})
+          ~vs:(fun i -> sorted.{2*i +1})
+          k
+
+      (** Just scan through unsorted *)
+      let find_unsorted k = 
+        let len = len_sorted () in
+        0 |> iter_k (fun ~k:kont i -> 
+            match i >= len with
+            | true -> None
+            | false -> 
+              match U.ks i = k with
+              | true -> Some (U.vs i)
+              | false -> kont (i+1))
+
+      (* new items are placed in unsorted, so we look there first *)
+      let find k = find_unsorted k |> function
+        | None -> find_sorted k
+        | Some v -> Some v
+
+      (** merge unsorted into sorted; NOTE assumes there is enough space to insert *)
+      let merge_unsorted () = 
+        let len1 = len_sorted () in
+        let len2 = len_unsorted () in
+        assert(len1 + len2 <= max_sorted);
+        (* copy unsorted into an array, and sort *)
+        let kvs2 = Array.init len2 (fun i -> U.ks i, U.vs i) in
+        Array.sort (fun (k1,_) (k2,_) -> Int.compare k1 k2) kvs2;
+        (* move sorted so that the elts reside at the end of the
+           partition *)
+        (* FIXME assert dst is within part_data *)
+        let dst = Bigarray.Array1.sub p.part_data (1+2*max_unsorted) (2*len1) in
+        Bigarray.Array1.blit sorted dst;
+        (* now merge sorted with kvs2, placing elts back into sorted *)
+        let ks1 i = dst.{ 2*i } in
+        let vs1 i = dst.{ 2*i +1 } in
+        let ks2 i = kvs2.(i) |> fst in
+        let vs2 i = kvs2.(i) |> snd in
+        merge 
+          ~ks1 ~vs1 ~len1
+          ~ks2 ~vs2 ~len2
+          ~set:(fun i k v -> sorted.{2*i}<- k; sorted.{2*i +1} <- v; ())
+          () |> fun n -> 
+        set_len_sorted n;
+        set_len_unsorted 0;
+        ()
+               
     end    
 
 
