@@ -272,21 +272,33 @@ module Int = struct
       let max_unsorted = 10 (* say; this is the number of keys; we
                                also store the values as well *)
 
+      (* subtract 2 for the length fields: len_sorted, len_unsorted *)
       let max_sorted = (partition_size - (2*max_unsorted) - 2) / 2
 
       let _ = assert(max_sorted >= 400)
 
-      let len_sorted () = p.part_data.{ 0 }
+      (* shorter abbreviation *)
+      let arr = p.part_data
 
-      let set_len_sorted n = p.part_data.{ 0 } <- n
+      module Ptr = struct
+        let len_sorted = 0
+        let sorted_start = 1
+        let len_unsorted = 2*max_sorted +1
+        let unsorted_start = 2*max_sorted +2
+      end
 
-      let sorted = Bigarray.Array1.sub p.part_data 1 (2*max_sorted)
+      (* in kv pairs *)
+      let len_sorted () = arr.{ Ptr.len_sorted }
+
+      let set_len_sorted n = arr.{ Ptr.len_sorted } <- n
+
+      let sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted)
       
-      let len_unsorted () = Bigarray.Array1.get p.part_data (2*max_sorted +1)
+      let len_unsorted () = arr.{ Ptr.len_unsorted }
 
-      let set_len_unsorted n = Bigarray.Array1.set p.part_data (2*max_sorted +1) n
+      let set_len_unsorted n = arr.{ Ptr.len_unsorted } <- n
 
-      let unsorted = Bigarray.Array1.sub p.part_data (2*max_sorted + 2) (max_unsorted * 2)
+      let unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (max_unsorted * 2)
 
       module U = struct
         let ks i = unsorted.{ 2*i }[@@inline]
@@ -346,7 +358,7 @@ module Int = struct
         (* move sorted so that the elts reside at the end of the
            partition *)
         (* FIXME assert dst is within part_data *)
-        let dst = Bigarray.Array1.sub p.part_data (1+2*max_unsorted) (2*len1) in
+        let dst = Bigarray.Array1.sub arr (Ptr.sorted_start+2*max_unsorted) (2*len1) in
         Bigarray.Array1.blit sorted dst;
         (* now merge sorted with kvs2, placing elts back into sorted *)
         let ks1 i = dst.{ 2*i } in
