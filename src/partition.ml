@@ -373,6 +373,22 @@ module Int = struct
         set_len_sorted n;
         set_len_unsorted 0;
         ()
+
+      (** If there are less than len_unsorted free entries in sorted,
+         we can't merge; in this case, we need to create 2 new
+         partitions, sort the entries and split into half for each
+         partition, then return with the new partitions (and note that
+         we need to GC the old partition at some point *)
+        
+      (** alloc returns a new partition *)
+      let split ~alloc = 
+        let p1,p2 = alloc(),alloc() in
+        assert(p1.len = p.len && p2.len = p.len);
+        (* ... FIXME *)
+        let k = failwith "" in
+        (p1,k,p2)
+        
+        
                
     end    
 
