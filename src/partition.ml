@@ -148,6 +148,47 @@ module Int = struct
       let part_data = Mmap.sub R.data ~off ~len in
       { off; len; part_data }
 
+    (* here we put a bit more structure on the partition; we have some
+       initial header info *)
+
+    module With_partition(P:sig
+        val p : partition
+      end) = struct
+      open P
+
+      (* the sorted array starts at position 0, with the length of the
+         elts, and then the sorted elts, and then 0 bytes, then the
+         unsorted length, unsorted elts, and 0 bytes *)
+
+      let max_unsorted = 10 (* say; this is the number of keys; we
+                               also store the values as well *)
+
+      let max_sorted = (partition_size - (2*max_unsorted) - 2) / 2
+
+      let _ = assert(max_sorted >= 400)
+
+      let len_sorted () = Bigarray.Array1.get p.part_data 0
+
+      let sorted = Bigarray.Array1.sub p.part_data 1 (2*max_sorted)
+
+      
+      
+      let len_unsorted () = Bigarray.Array1.get p.part_data (2*max_sorted +1)
+
+      let set_len_unsorted n = Bigarray.Array1.set p.part_data (2*max_sorted +1) n
+
+      let unsorted = Bigarray.Array1.sub p.part_data (2*max_sorted + 2) (max_unsorted * 2)
+
+      let add_unsorted k v = 
+        let x = len_unsorted () in
+        Bigarray.Array1.set unsorted (2*x) k;
+        Bigarray.Array1.set unsorted (2*x +1) v;
+        set_len_unsorted (x+1);
+        ()
+
+    end    
+
+
   end
     
 end
