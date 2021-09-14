@@ -135,6 +135,12 @@ module Bucket = struct
     let unsorted_start = 2*max_sorted +2
   end
 
+  (* for debugging *)
+  type exported_bucket = {
+    sorted: (int*int) list;
+    unsorted: (int*int) list
+  }
+
   module With_bucket(B:sig
       val bucket : bucket
     end) = struct
@@ -162,9 +168,16 @@ module Bucket = struct
 
     let unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted)
 
+    (* unsorted *)
     module U = struct
       let ks i = unsorted.{ 2*i }[@@inline]
       let vs i = unsorted.{ 2*i +1 }[@@inline]
+    end
+
+    (* sorted *)
+    module S = struct
+      let ks i = sorted.{ 2*i }[@@inline]
+      let vs i = sorted.{ 2*i +1 }[@@inline]
     end
 
     let find_sorted k = 
@@ -310,11 +323,18 @@ module Bucket = struct
           split_with_addition ~alloc_bucket (k,v) |> fun (p1,k,p2) -> 
           `Split(p1,k,p2)
 
+    let export () = 
+      let len1 = len_sorted () in
+      let len2 = len_unsorted () in
+      (* copy sorted into an array *)
+      let kvs1 = Array.init len1 (fun i -> S.ks i, S.vs i) in
+      (* copy unsorted into an array, and sort *)
+      let kvs2 = Array.init len2 (fun i -> U.ks i, U.vs i) in
+      { sorted=Array.to_list kvs1; unsorted=Array.to_list kvs2 }      
+
     (* FIXME what about delete? *)
   end (* With_bucket *)
 
-
-  (* FIXME we shouldn't need data to work with buckets *)
   let add_to_bucket ~bucket = 
     let open With_bucket(struct let bucket=bucket end) in
     add
@@ -323,9 +343,23 @@ module Bucket = struct
 alloc_bucket:(unit -> bucket) ->
 int -> int -> [ `Ok | `Split of bucket * int * bucket ] = add_to_bucket
 
+  let find ~bucket = 
+    let open With_bucket(struct let bucket=bucket end) in
+    find
+
+  let _ : bucket:bucket -> int -> int option = find
+
+  let export bucket = 
+    let open With_bucket(struct let bucket=bucket end) in
+    export()    
+
 end (* Bucket *)
 
 
+type export_t = {
+  partition: (int*int) list;
+  buckets: Bucket.exported_bucket list
+}
 
 module Make() = struct
 
@@ -369,7 +403,6 @@ module Make() = struct
       r
     in
     let partition = initial_partitioning ~alloc ~n in
-    (* FIXME following duplicates some code from eg find_bucket *)
     { fn; fd; data; alloc_counter; alloc; partition }
 
   let alloc_bucket t = 
@@ -388,8 +421,11 @@ module Make() = struct
     let len = Bucket.bucket_size in
     let bucket_data = Mmap.sub data ~off ~len in
     k,{ off; len; bucket_data }
+
+  
+  (* public interface: insert, find (FIXME delete) *)
     
-  let add t k v = 
+  let insert t k v = 
     (* find bucket *)
     let k1,bucket = find_bucket ~partition:t.partition ~data:t.data k in
     add_to_bucket ~t ~bucket k v |> function
@@ -399,6 +435,18 @@ module Make() = struct
       t.partition <- Prt.split t.partition ~k1 ~r1:b1.off ~k2 ~r2:b2.off;
       ()  
     
+  let find t k = 
+    let _,bucket = find_bucket ~partition:t.partition ~data:t.data k in
+    Bucket.find ~bucket k
+
+  let export t = 
+    let { partition; data; _ } = t in
+    Prt.to_list partition |> fun krs -> 
+    krs |> List.map (fun (k,_) -> find_bucket ~partition ~data k |> function (_,b) -> Bucket.export b) |> fun buckets -> 
+    {partition=krs;buckets}
+
+  let _ : t -> export_t = export
+
 end (* Make *)
 
 
