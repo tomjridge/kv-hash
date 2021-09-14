@@ -1,5 +1,6 @@
 (library
  (public_name "kv_hash")
  (name "kv_hash")
- (libraries base mmap))
+ (preprocess (pps ppx_sexp_conv ppx_sexp_message))
+ (libraries base sexplib mmap))
 

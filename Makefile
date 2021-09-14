@@ -4,12 +4,13 @@ scratch:=/tmp/l/github/scratch
 default: all
 
 all::
-	dune build bin/example.exe
+	dune build test/test.exe
+#	dune build bin/example.exe
 
 -include Makefile.ocaml
 
-run:
-	time $(DUNE) exec bin/example.exe
+run_test:
+	OCAMLRUNPARAM=b dune exec test/test.exe
 
 # for auto-completion of Makefile target
 clean::

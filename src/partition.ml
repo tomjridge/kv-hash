@@ -83,6 +83,7 @@ module Make_partition(S:sig
   (* let ops = { find; split; of_list; to_list } *)
 end
 
+(*
 module Config = struct
 
   let blk_sz = 4096
@@ -93,6 +94,8 @@ module Config = struct
 
 end
 open Config
+*)
+
 
 module Interpolate_ = Interpolate(struct type k = int type v = int end)
           
@@ -104,8 +107,24 @@ type bucket = {
   bucket_data : int_array
 }
 
+include struct
+  (* for debugging *)
+  open Sexplib.Std
+  type exported_bucket = {
+    sorted: (int*int) list;
+    unsorted: (int*int) list
+  }[@@deriving sexp]
+end
 
-module Bucket = struct
+
+module type BUCKET_CONFIG = sig
+  val max_sorted: int  
+  val max_unsorted: int
+end
+
+
+module Bucket(C:BUCKET_CONFIG) = struct
+
 
   (* NOTE a partition should be a multiple of the block size
      (measured in "kind_size_in_bytes int"); actually, for
@@ -113,33 +132,40 @@ module Bucket = struct
      sized, and the code should work independent of the order of
      page flushes *)
 
-  let bucket_size = Config.ints_per_block
+  (* NOTE sorted should always have unique keys; unsorted may not have
+     unique keys *)
+
+  (* let bucket_size = Config.ints_per_block *)
 
   (* the sorted array starts at position 0, with the length of the
      elts, and then the sorted elts, and then 0 bytes, then the
      unsorted length, unsorted elts, and 0 bytes *)
 
+  open C 
+
+  let bucket_size_ints = 1 + 2*max_sorted + 1 + 2*max_unsorted
+
+  let bucket_size_bytes = bucket_size_ints * Bigarray.kind_size_in_bytes Bigarray.int
+
+
+(*
   let max_unsorted = 10 (* say; this is the number of keys; we
                            also store the values as well *)
 
   (* subtract 2 for the length fields: len_sorted, len_unsorted *)
   let max_sorted = (bucket_size - (2*max_unsorted) - 2) / 2
+*)
 
-  let _ = assert(max_sorted >= 400)
+  (* FIXME what is the max_sorted, actually? *)
+  let _ = assert(max_sorted >= max_unsorted)
 
   (** Positions/offsets within the buffer that we store certain info *)
   module Ptr = struct
     let len_sorted = 0
     let sorted_start = 1
-    let len_unsorted = 2*max_sorted +1
-    let unsorted_start = 2*max_sorted +2
+    let len_unsorted = 2*max_sorted +1 (* position at which we store the len of unsorted *)
+    let unsorted_start = len_unsorted +1
   end
-
-  (* for debugging *)
-  type exported_bucket = {
-    sorted: (int*int) list;
-    unsorted: (int*int) list
-  }
 
   module With_bucket(B:sig
       val bucket : bucket
@@ -166,7 +192,14 @@ module Bucket = struct
 
     let set_len_unsorted n = arr.{ Ptr.len_unsorted } <- n
 
-    let unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted)
+    let unsorted = 
+      assert( 
+        let len = Bigarray.Array1.dim arr in
+        Ptr.unsorted_start + (2*max_unsorted) <= len
+        || begin
+          Printf.printf "%d %d %d\n%!" Ptr.unsorted_start (2*max_unsorted) len;
+          false end);
+      Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted)
 
     (* unsorted *)
     module U = struct
@@ -187,35 +220,53 @@ module Bucket = struct
         ~vs:(fun i -> sorted.{2*i +1})
         k
 
-    (** Just scan through unsorted *)
+    (** Just scan through unsorted, newest elts first *)
     let find_unsorted k = 
       let len = len_sorted () in
-      0 |> iter_k (fun ~k:kont i -> 
-          match i >= len with
+      len -1 |> iter_k (fun ~k:kont i -> 
+          match i < 0 with
           | true -> None
           | false -> 
             match U.ks i = k with
             | true -> Some (U.vs i)
-            | false -> kont (i+1))
+            | false -> kont (i-1))
 
     (* new items are placed in unsorted, so we look there first *)
     let find k = find_unsorted k |> function
       | None -> find_sorted k
       | Some v -> Some v
 
+    (* NOTE need to remove duplicates *)
+
+    module Map = Map.Make(Int)
+
+    (* convert to sorted array; include some additional elts xs *)
+    let unsorted_to_sorted xs = 
+      let len = len_unsorted () in
+      let m = Map.of_seq (List.to_seq xs) in
+      (0,m) |> iter_k (fun ~k:kont (i,m) -> 
+          match i < len with
+          | false -> m
+          | true -> 
+            Map.add (U.ks i) (U.vs i) m |> fun m -> 
+            kont (i+1,m)) |> fun m -> 
+      Map.to_seq m |> fun seq -> 
+      Array.of_seq seq     
+
     (** merge unsorted into sorted; NOTE assumes there is enough space to insert *)
     let merge_unsorted () = 
+      trace "merge_unsorted";
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
       assert(len1 + len2 <= max_sorted);
       (* copy unsorted into an array, and sort *)
-      let kvs2 = Array.init len2 (fun i -> U.ks i, U.vs i) in
-      Array.sort (fun (k1,_) (k2,_) -> Int.compare k1 k2) kvs2;
+      let kvs2 = unsorted_to_sorted [] in
+      let len2 = Array.length kvs2 in
       (* move sorted so that the elts reside at the end of the
          partition *)
       (* FIXME assert dst is within bucket_data *)
       let dst = Bigarray.Array1.sub arr (Ptr.sorted_start+2*max_unsorted) (2*len1) in
-      Bigarray.Array1.blit sorted dst;
+      Bigarray.Array1.blit (Bigarray.Array1.sub sorted 0 (2*len1)) dst;
       (* now merge sorted with kvs2, placing elts back into sorted *)
       let ks1 i = dst.{ 2*i } in
       let vs1 i = dst.{ 2*i +1 } in
@@ -252,10 +303,12 @@ module Bucket = struct
       assert(p1.len = p.len && p2.len = p.len);
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
-      assert(len1 + len2 <= max_sorted);
+      assert(not (len1 + len2 <= max_sorted));
       (* copy unsorted into an array (including kv), and sort *)
-      let kvs2 = Array.init (len2+1) (fun i -> if i < len2 then U.ks i, U.vs i else kv) in
-      Array.sort (fun (k1,_) (k2,_) -> Int.compare k1 k2) kvs2;
+      let kvs2 = unsorted_to_sorted [kv] in
+      (* FIXME may need another len2 here, in case of duplicates, and
+         we also added a new elt *)
+      let len2 = Array.length kvs2 in
       (* now merge directly into p1.sorted and p2.sorted; roughly
          half in p1, half in p2 (p1 may duplicate some old entries
          that get overridden by entries in p2) *)
@@ -287,8 +340,13 @@ module Bucket = struct
         ~set
         () |> fun n -> 
       p1.bucket_data.{ Ptr.len_sorted } <- cut_point;
-      assert(len1 + len2 < 2*len1);
-      assert(n-cut_point>0); 
+      assert(len1 + len2 <= 2*len1); (* FIXME logic *)
+      assert(
+        n-cut_point>0 || begin
+          Printf.printf "%d %d %d %d\n%!" len1 len2 cut_point n;
+          false
+        end
+      ); 
       (* FIXME are we sure this is the case? yes, if cut_point <
          original sorted length; why is this the case? need l1+l2 <
          2*l1, which should be the case if l2 small compared to l1
@@ -301,7 +359,7 @@ module Bucket = struct
     let add ~alloc_bucket k v = 
       (* try to add in unsorted *)
       let len2 = len_unsorted () in
-      match len2 < max_sorted with
+      match len2 < max_unsorted with
       | true -> (
           unsorted.{ 2*len2 } <- k;
           unsorted.{ 2*len2 +1 } <- v;
@@ -358,10 +416,39 @@ end (* Bucket *)
 
 type export_t = {
   partition: (int*int) list;
-  buckets: Bucket.exported_bucket list
+  buckets: exported_bucket list
 }
 
-module Make() = struct
+module type CONFIG = sig
+  include BUCKET_CONFIG
+  val blk_sz : int (* in bytes *)
+end
+
+module Make(Config:CONFIG) = struct
+
+  open Config
+
+  module Bucket = Bucket(Config)
+
+  let blk_sz = Config.blk_sz
+
+  let ints_per_block = blk_sz / Bigarray.kind_size_in_bytes Bigarray.int
+
+  let _ = assert(Bucket.bucket_size_bytes <= blk_sz)
+
+  let _ = 
+    let open Sexplib.Std in
+    Sexplib.Sexp.to_string_hum 
+      [%message "Config"
+        ~blk_sz:(blk_sz : int)
+        ~ints_per_block:(ints_per_block : int)
+        ~max_sorted:(max_sorted : int)
+        ~max_unsorted:(max_unsorted : int)
+        ~bucket_size_ints:(Bucket.bucket_size_ints : int)
+        ~bucket_size_bytes:(Bucket.bucket_size_bytes : int)
+      ]
+    |> print_endline
+
 
   module S = struct
     type k = int
@@ -391,11 +478,22 @@ module Make() = struct
     (* add_to_bucket     : bucket -> int -> int -> [ `Ok | `Split of bucket * int * bucket ]; *)
   }
 
-  (** n is the initial number of partitions of 0...max_int *)
-  let create ~fn ~n =
+  (* create with an initial partition *)
+  let create_p ~fn ~partition = 
     Unix.(openfile fn [O_CREAT;O_RDWR; O_TRUNC] 0o640) |> fun fd -> 
     let data = Mmap.of_fd fd Bigarray.int in
     (* keep block 0 for header etc *)
+    let max_r = partition |> Prt.to_list |> List.map snd |> List.fold_left max 1 in
+    let alloc_counter = ref (1+max_r) in
+    let alloc () = 
+      !alloc_counter |> fun r -> 
+      incr alloc_counter;
+      r
+    in
+    { fn; fd; data; alloc_counter; alloc; partition }
+
+  (** n is the initial number of partitions of 0...max_int *)
+  let create ~fn ~n =
     let alloc_counter = ref 1 in
     let alloc () = 
       !alloc_counter |> fun r -> 
@@ -403,13 +501,16 @@ module Make() = struct
       r
     in
     let partition = initial_partitioning ~alloc ~n in
-    { fn; fd; data; alloc_counter; alloc; partition }
+    create_p ~fn ~partition
+
+  let mk_bucket ~data i = 
+    let off = Config.blk_sz * i in
+    let len = ints_per_block in
+    { off; len; bucket_data=Mmap.sub data ~off ~len }
 
   let alloc_bucket t = 
     t.alloc () |> fun i -> 
-    let off = Config.int_offset ~blk:i in
-    let len = Config.ints_per_block in
-    { off; len; bucket_data=Mmap.sub t.data ~off ~len }
+    mk_bucket ~data:t.data i
 
   let add_to_bucket ~t ~bucket k v = 
     Bucket.add_to_bucket ~alloc_bucket:(fun () -> alloc_bucket t) ~bucket k v
@@ -417,22 +518,20 @@ module Make() = struct
   let find_bucket ~partition ~data k = 
     Prt.find k partition |> fun (k,r) -> 
     (* r is the partition offset within the store *)
-    let off = r * Bucket.bucket_size in
-    let len = Bucket.bucket_size in
-    let bucket_data = Mmap.sub data ~off ~len in
-    k,{ off; len; bucket_data }
+    k,mk_bucket ~data r
 
   
   (* public interface: insert, find (FIXME delete) *)
     
   let insert t k v = 
+    Printf.printf "insert: inserting %d %d\n%!" k v;
     (* find bucket *)
     let k1,bucket = find_bucket ~partition:t.partition ~data:t.data k in
     add_to_bucket ~t ~bucket k v |> function
     | `Ok -> ()
     | `Split(b1,k2,b2) -> 
-      Printf.printf "Split partition %d into %d %d\n%!" k1 k1 k2;
-      t.partition <- Prt.split t.partition ~k1 ~r1:b1.off ~k2 ~r2:b2.off;
+      Printf.printf "insert: split partition %d into %d %d\n%!" k1 k1 k2;
+      t.partition <- Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
       ()  
     
   let find t k = 
@@ -447,6 +546,66 @@ module Make() = struct
 
   let _ : t -> export_t = export
 
+  let show t = 
+    let open Sexplib.Std in
+    export t |> fun e -> 
+    Sexplib.Sexp.to_string_hum 
+      [%message "Partition, buckets"
+        ~partition:(e.partition : (int*int) list)
+        ~buckets:(e.buckets: exported_bucket list)
+      ]
+    |> print_endline
+    
+
 end (* Make *)
 
+
+module Test() = struct
+  
+  module Config = struct
+    let max_sorted = 2
+    let max_unsorted = 1
+    let blk_sz = 8*8
+
+  end
+
+  module M = Make(Config)
+  open M
+
+  let init_partition = [(0,1);(20,2);(40,3);(60,4);(80,5);(100,5)] |> Prt.of_list
+
+  let t = create_p ~fn:"test.db" ~partition:init_partition
+
+  let _ = show t
+
+  let v = (-1)
+  
+  let _ = insert t 0 v
+  let _ = show t
+
+  let _ = insert t 1 v
+  let _ = show t
+
+  let _ = insert t 2 v
+  let _ = show t
+
+  let _ = insert t 0 v
+  let _ = show t
+
+  let _ = insert t 1 v
+  let _ = show t
+
+(*
+  let _ = insert t 2 v
+  let _ = insert t 0 v
+  let _ = insert t 1 v
+  let _ = insert t 2 v
+  let _ = insert t 3 v
+  let _ = show t
+
+  let _ = insert t 4 v
+  let _ = show t
+*)
+
+end
 
