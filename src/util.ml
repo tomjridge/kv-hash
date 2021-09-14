@@ -18,9 +18,9 @@ let dest_Some = function
   | Some x -> x
 
 (* trace execution *)
-let trace s = 
-  print_endline s
-  (* () *)
+let trace (s:unit->string) = 
+  (* print_endline (s()) *)
+  ignore(s); ()
 [@@warning "-27"]
 
 
@@ -88,7 +88,7 @@ module Merge(S:sig
   open S
 
   let merge_rest ks vs j len i = 
-    Printf.printf "merge_rest: %d %d %d\n%!" j len i;
+    trace(fun () -> Printf.sprintf "merge_rest: %d %d %d\n%!" j len i);
     assert(j <= len);
     (j,i) |> iter_k (fun ~k:kont (j,i) -> 
         match j >= len with 

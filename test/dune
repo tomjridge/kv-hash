@@ -3,3 +3,8 @@
  (modules Test)
  (libraries kv_hash))
 
+(executable
+ (name "test2")
+ (modules Test2)
+ (libraries kv_hash))
+

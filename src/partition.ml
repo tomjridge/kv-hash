@@ -255,7 +255,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
 
     (** merge unsorted into sorted; NOTE assumes there is enough space to insert *)
     let merge_unsorted () = 
-      trace "merge_unsorted";
+      trace(fun () -> "merge_unsorted");
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
       assert(len1 + len2 <= max_sorted);
@@ -481,6 +481,7 @@ module Make(Config:CONFIG) = struct
   (* create with an initial partition *)
   let create_p ~fn ~partition = 
     Unix.(openfile fn [O_CREAT;O_RDWR; O_TRUNC] 0o640) |> fun fd -> 
+    Unix.truncate fn (4.0 *. 2.0**10.0 *. 2.0**10.0 *. 2.0**10.0 |> Int.of_float);
     let data = Mmap.of_fd fd Bigarray.int in
     (* keep block 0 for header etc *)
     let max_r = partition |> Prt.to_list |> List.map snd |> List.fold_left max 1 in
@@ -524,13 +525,13 @@ module Make(Config:CONFIG) = struct
   (* public interface: insert, find (FIXME delete) *)
     
   let insert t k v = 
-    Printf.printf "insert: inserting %d %d\n%!" k v;
+    trace(fun () -> Printf.sprintf "insert: inserting %d %d\n%!" k v);
     (* find bucket *)
     let k1,bucket = find_bucket ~partition:t.partition ~data:t.data k in
     add_to_bucket ~t ~bucket k v |> function
     | `Ok -> ()
     | `Split(b1,k2,b2) -> 
-      Printf.printf "insert: split partition %d into %d %d\n%!" k1 k1 k2;
+      trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
       t.partition <- Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
       ()  
     
@@ -609,3 +610,46 @@ module Test() = struct
 
 end
 
+
+
+module Test2() = struct
+
+  module Config = struct
+    (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
+       sorted; 255 kvs for unsorted and sorted *)
+    
+    let max_sorted = 255 - 10
+    let max_unsorted = 10
+    let blk_sz = 4096
+  end
+
+  module M = Make(Config)
+  open M
+
+  let t = create ~fn:"test.db" ~n:10_000
+
+  let lim = 10_000_000
+
+  let _ = 
+    Printf.printf "Inserting %d kvs\n%!" lim;
+    0 |> iter_k (fun ~k:kont i -> 
+        match i < lim with
+        | true -> 
+          let k = Random.int64 (Int64.of_int Int.max_int) |> Int64.to_int in
+          insert t k k;
+          kont (i+1)
+        | false -> ())
+
+(*
+make -k run_test 
+time OCAMLRUNPARAM=b dune exec test/test2.exe
+(Config (blk_sz 4096) (ints_per_block 512) (max_sorted 245) (max_unsorted 10)
+ (bucket_size_ints 512) (bucket_size_bytes 4096))
+Inserting 1000000 kvs
+
+real	0m1.812s
+user	0m1.354s
+sys	0m0.318s
+*)
+
+end

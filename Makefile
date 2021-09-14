@@ -5,12 +5,13 @@ default: all
 
 all::
 	dune build test/test.exe
+	dune build test/test2.exe
 #	dune build bin/example.exe
 
 -include Makefile.ocaml
 
 run_test:
-	OCAMLRUNPARAM=b dune exec test/test.exe
+	time OCAMLRUNPARAM=b dune exec test/test2.exe
 
 # for auto-completion of Makefile target
 clean::
