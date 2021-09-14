@@ -153,9 +153,9 @@ module Merge(S:sig
   end) = struct
   open S
 
-  let merge_rest ks vs j i = 
+  let merge_rest ks vs j len i = 
     (j,i) |> iter_k (fun ~k:kont (j,i) -> 
-        match j >= len1 with 
+        match j >= len with 
         | true -> i (* return the length of the merged result *)
         | false -> 
           set i (ks j) (vs j);
@@ -164,8 +164,8 @@ module Merge(S:sig
   let merge () = 
     (0,0,0) |> iter_k (fun ~k:kont (i1,i2,i) -> 
         match () with
-        | _ when i1 >= len1 -> merge_rest ks2 vs2 i2 i
-        | _ when i2 >= len2 -> merge_rest ks1 vs1 i1 i
+        | _ when i1 >= len1 -> merge_rest ks2 vs2 i2 len2 i
+        | _ when i2 >= len2 -> merge_rest ks1 vs1 i1 len1 i
         | _ -> 
           let k1,k2 = ks1 i1, ks2 i2 in
           match k1 < k2 with 
@@ -378,14 +378,63 @@ module Int = struct
          we can't merge; in this case, we need to create 2 new
          partitions, sort the entries and split into half for each
          partition, then return with the new partitions (and note that
-         we need to GC the old partition at some point *)
+         we need to GC/recycle the old partition at some point) *)
         
-      (** alloc returns a new partition *)
+      (** NOTE alloc returns a new *clean* partition (lengths are 0 etc) *)
       let split ~alloc = 
         let p1,p2 = alloc(),alloc() in
+        (* check clean partitions *)
+        assert(p1.part_data.{ Ptr.len_sorted } = 0
+               && p1.part_data.{ Ptr.len_unsorted } = 0);
+        assert(p2.part_data.{ Ptr.len_sorted } = 0
+               && p2.part_data.{ Ptr.len_unsorted } = 0);
         assert(p1.len = p.len && p2.len = p.len);
-        (* ... FIXME *)
-        let k = failwith "" in
+        let len1 = len_sorted () in
+        let len2 = len_unsorted () in
+        assert(len1 + len2 <= max_sorted);
+        (* copy unsorted into an array, and sort *)
+        let kvs2 = Array.init len2 (fun i -> U.ks i, U.vs i) in
+        Array.sort (fun (k1,_) (k2,_) -> Int.compare k1 k2) kvs2;
+        (* now merge directly into p1.sorted and p2.sorted; roughly
+           half in p1, half in p2 (p1 may duplicate some old entries
+           that get overridden by entries in p2) *)
+        let cut_point = (len1+len2) / 2 in
+        let ks1 i = sorted.{ 2*i } in
+        let vs1 i = sorted.{ 2*i +1 } in
+        let ks2 i = kvs2.(i) |> fst in
+        let vs2 i = kvs2.(i) |> snd in
+        let count = ref 0 in
+        let set i k v = 
+          match !count < cut_point with
+          | true -> 
+            (* fill p1 *)
+            p1.part_data.{ Ptr.sorted_start + 2*i } <- k;
+            p1.part_data.{ Ptr.sorted_start + 2*i +1} <- v;
+            incr count;
+            ()
+          | false -> 
+            (* fill p2 *)
+            let i = i - cut_point in
+            p2.part_data.{ Ptr.sorted_start + 2*i } <- k;
+            p2.part_data.{ Ptr.sorted_start + 2*i +1} <- v;
+            (* no need to incr count *)
+            ()
+        in
+        merge 
+          ~ks1 ~vs1 ~len1
+          ~ks2 ~vs2 ~len2
+          ~set
+          () |> fun n -> 
+        p1.part_data.{ Ptr.len_sorted } <- cut_point;
+        assert(len1 + len2 < 2*len1);
+        assert(n-cut_point>0); 
+        (* FIXME are we sure this is the case? yes, if cut_point <
+           original sorted length; why is this the case? need l1+l2 <
+           2*l1, which should be the case if l2 small compared to l1
+           *)
+        p2.part_data.{ Ptr.len_sorted } <- n - cut_point;
+        (* get lowest key in p2 *)
+        let k = p2.part_data.{ Ptr.sorted_start } in
         (p1,k,p2)
         
         
