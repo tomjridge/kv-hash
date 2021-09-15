@@ -504,6 +504,12 @@ module Make(Config:CONFIG) = struct
     let partition = initial_partitioning ~alloc ~n in
     create_p ~fn ~partition
 
+  let close t = 
+    Mmap.close t.data; (* closes the underlying fd *)
+    (* Unix.close t.fd; *)
+    (* FIXME sync partition for reopen *)
+    ()
+
   let open_ ~fn:_ ~n:_ = failwith "FIXME"
 
   let mk_bucket ~data i = 

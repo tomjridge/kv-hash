@@ -69,7 +69,7 @@ module Values : VALUES = struct
 
   let create ~fn = 
     (* make sure the file exists, and is of length 0 *)
-    let fd = Unix.(openfile fn [O_RDWR;O_TRUNC] 0o640) in
+    let fd = Unix.(openfile fn [O_CREAT;O_RDWR;O_TRUNC] 0o640) in
     Unix.close fd;
     let ch_r = open_in fn in
     let ch_w = open_out fn in
@@ -103,7 +103,11 @@ type 'int_map t = {
   
 module With_int_map(Int_map:INT_MAP) = struct
   
-  let hash (s:string) = XXHash.XXH64.hash s |> Int64.to_int
+  let hash (s:string) = 
+    let h = XXHash.XXH64.hash s |> Int64.to_int in
+    let h = abs h in
+    assert(h>=0);
+    h
 
   let find_opt t k = 
     let k' = hash k in
@@ -155,6 +159,10 @@ module Make_1 = struct
     
   include With_int_map_  
       
+  let close t = 
+    Values.close t.values;
+    Int_map.close t.int_map
+      
   type nonrec t = Int_map.t t
 end
 
@@ -166,6 +174,7 @@ module type S = sig
   val find_opt : t -> string -> string option
   val insert : t -> string -> string -> unit
   val delete : t -> string -> unit
+  val close : t -> unit
 end
 
 module Make_2 : S = Make_1
