@@ -618,8 +618,8 @@ module Test2() = struct
     (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
        sorted; 255 kvs for unsorted and sorted *)
     
-    let max_sorted = 255 - 10
     let max_unsorted = 10
+    let max_sorted = 255 - max_unsorted
     let blk_sz = 4096
   end
 
