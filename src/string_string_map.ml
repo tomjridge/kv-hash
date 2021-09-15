@@ -25,8 +25,18 @@ may be substantial overhead in the values file.
 
 *)
 
+module type VALUES = 
+sig
+  type t 
+  val append_value : t -> string -> int
+  val read_value : t -> off:int -> string
+  val create : fn:string -> t
+  val open_ : fn:string -> t
+  val flush : t -> unit
+  val close : t -> unit
+end
 
-module Values = struct
+module Values : VALUES = struct
   
   (* NOTE to avoid issues with torn writes when using mmap, we default
      to the standard pread/pwrite interface; perhaps better to use
@@ -43,6 +53,10 @@ module Values = struct
      functions which use marshalling; FIXME format not stable long
      term *)
 
+  (* NOTE because we are using marshalling, append_value and
+     read_value are polymorphic in the value type, so we don't have to
+     specialize to strings here; may be useful if the value type is
+     something other than string *)
   let append_value t (v:string) = 
     let pos = pos_out t.ch_w in
     output_value t.ch_w v;
@@ -65,6 +79,14 @@ module Values = struct
     let ch_r = open_in fn in
     let ch_w = open_out fn in
     { fn; ch_r; ch_w }
+
+  let flush t = flush t.ch_w
+
+  let close t = 
+    flush t;
+    close_in_noerr t.ch_r;
+    close_out_noerr t.ch_w;
+    ()
 end
 
 module type INT_MAP = sig 
@@ -101,7 +123,50 @@ module With_int_map(Int_map:INT_MAP) = struct
 
 end
 
-(** Putting it all together *)
-module Make() = struct
+(** Putting it all together.
 
+To create given filename fn:
+- create the int->int map on fn
+- create the values map on fn.values
+
+
+ *)
+module Make_1 = struct
+
+  module Config = struct
+    (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
+       sorted; 255 kvs for unsorted and sorted *)
+
+    let max_unsorted = 10
+    let max_sorted = 255 - max_unsorted
+    let blk_sz = 4096
+  end
+
+  module Int_map = Partition.Make(Config)
+
+  module With_int_map_ = With_int_map(Int_map)
+
+  let create ~fn = 
+    Int_map.create ~fn ~n:10_000 |> fun int_map -> 
+    let values = Values.create ~fn:(fn ^".values") in
+    { values; int_map }
+
+  (* let open_ ~fn = failwith "FIXME" *)
+    
+  include With_int_map_  
+      
+  type nonrec t = Int_map.t t
 end
+
+
+module type S = sig
+  type t
+  val create : fn:string -> t
+  (* val hash : string -> int *)
+  val find_opt : t -> string -> string option
+  val insert : t -> string -> string -> unit
+  val delete : t -> string -> unit
+end
+
+module Make_2 : S = Make_1
+

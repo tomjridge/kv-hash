@@ -504,6 +504,8 @@ module Make(Config:CONFIG) = struct
     let partition = initial_partitioning ~alloc ~n in
     create_p ~fn ~partition
 
+  let open_ ~fn:_ ~n:_ = failwith "FIXME"
+
   let mk_bucket ~data i = 
     let off = Config.blk_sz * i in
     let len = ints_per_block in
@@ -535,9 +537,11 @@ module Make(Config:CONFIG) = struct
       t.partition <- Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
       ()  
     
-  let find t k = 
+  let find_opt t k = 
     let _,bucket = find_bucket ~partition:t.partition ~data:t.data k in
     Bucket.find ~bucket k
+
+  let delete _t _k = failwith "FIXME"
 
   let export t = 
     let { partition; data; _ } = t in
