@@ -24,6 +24,31 @@ let trace (s:unit->string) =
 [@@warning "-27"]
 
 
+(** This builds a comparator for Jane St. Base.Map. Not sure this is
+   the intended procedure. *)
+module Make_comparator(S:sig type k val compare:k->k->int end) = struct
+  open S
+
+  module K = struct
+    type t = k 
+    let compare = compare
+    let sexp_of_t: t -> Base.Sexp.t = fun _ -> Base.Sexp.Atom __LOC__
+    (** ASSUMES this function is never called in our usecases; FIXME
+        it is called; how? *)
+  end
+  include K
+
+  module C = struct
+    type t = K.t
+    include Base.Comparator.Make(K)
+  end
+  include C
+
+  let comparator : _ Base.Map.comparator = (module C)
+end
+
+
+
 (** Interpolate once, then scan. ASSUMES we are using Stdlib.( < > =) etc *)
 module Interpolate(S:sig
     type k = int
@@ -128,3 +153,5 @@ let merge (type k v) ~ks1 ~vs1 ~len1 ~ks2 ~vs2 ~len2 ~set =
     end) 
   in
   Merge.merge
+
+

@@ -5,6 +5,8 @@ Terminology:
 - partition: a collection of buckets which covers the space
 - bucket: a collection (sorted and unsorted) of kvs for a particular subrange of the space
 
+NOTE Keys are ints from 0 to Int.max_int inclusive. This means we miss out on using negative integers.
+
 FIXME
 - we could consider replacing existing kvs on each add rather than
   just placing directly into unsorted; this would give us the
@@ -12,6 +14,7 @@ FIXME
   we expect key updates to be rare (so, no point paying the cost of
   trying to locate in sorted)
 
+FIXME distinguish offsets (and lengths) measured in ints {off_i} from offsets measured in bytes {off_b}
 
  *)
 
@@ -21,41 +24,38 @@ open Util
 open Partition_intf
 
 
-(* We could just use the range 0 to Int.max_int; this would make
-   things easier, although we miss out on 2 bits per key
+(* The lowest key is 0. Every partition must contain a mapping for
+   min_key. *)
 
-In this case, we don't need None, and the lowest key is 0. Every
-   partition must contain a mapping for min_key.
+(** A partition is an n-way split of the key space (ints), represented
+   by a map [(k0->r0),...]. k0 is always 0. Each ri is a pointer to a
+   hashbucket containing entries for keys k such that ki <= k <
+   k(i+1). *)
 
- *)
+module type S = sig
+  type k
+  val compare : k -> k -> int
+  val min_key : k
+  type r
+end
 
 
-module Make_partition(S:sig
-    type k
-    val compare : k -> k -> int
-    val min_key : k
-    type r
-  end) : PARTITION with type k=S.k and type r=S.r = struct
+module Make_partition(S:S) 
+  : PARTITION with type k=S.k and type r=S.r 
+= struct
   include S
 
-  module K = struct 
-    type t = k 
-    let compare = compare
-    let sexp_of_t: t -> Base.Sexp.t = fun _ -> Base.Sexp.Atom __LOC__
-    (** ASSUMES this function is never called in our usecases; FIXME
-        it is called; how? *)
-  end
+  (* Construct a map, using [compare]; we use Base.Map because it
+     supports extra operations (eg closest_key) which we need. *)
+  module Comparator_ = Make_comparator(S)
 
-  module C = struct
-    type t = K.t
-    include Base.Comparator.Make(K)
-  end
-
-  let comparator : _ Base.Map.comparator = (module C)
+  type comparator_witness = Comparator_.comparator_witness
+  let comparator : (k,comparator_witness) Base.Map.comparator = Comparator_.comparator
 
   module Map = Base.Map
 
-  type partition = (k,r,C.comparator_witness) Map.t 
+  (* A partition is just a map from k to r *)
+  type partition = (k,r,comparator_witness) Map.t 
   type t = partition
 
   (* this primed version works with k options *)
@@ -76,25 +76,19 @@ module Make_partition(S:sig
   let split (p:partition) ~k1 ~r1 ~k2 ~r2 =
     assert(Map.mem p k1);
     assert(not (Map.mem p k2));
-    Map.change p k1 ~f:(function | None -> failwith "impossible" | Some _r1 -> Some r1) |> fun p -> 
+    let p = Map.change p k1 
+        ~f:(function | None -> failwith "impossible" 
+                     | Some _r1 -> Some r1)
+    in
     Map.set p ~key:k2 ~data:r2 |> fun p -> 
     p
 
-  (* let ops = { find; split; of_list; to_list } *)
+  (* FIXME prefer non-marshalling for persistence *)
+  let write t oc =
+    output_value oc (to_list t)
+
+  let read ic = input_value ic |> of_list
 end
-
-(*
-module Config = struct
-
-  let blk_sz = 4096
-
-  let ints_per_block = 4096 / Bigarray.kind_size_in_bytes Bigarray.int
-
-  let int_offset ~blk = blk * ints_per_block
-
-end
-open Config
-*)
 
 
 module Interpolate_ = Interpolate(struct type k = int type v = int end)
@@ -126,10 +120,8 @@ end
 module Bucket(C:BUCKET_CONFIG) = struct
 
 
-  (* NOTE a partition should be a multiple of the block size
-     (measured in "kind_size_in_bytes int"); actually, for
-     crash-resilience a partition should be block aligned and block
-     sized, and the code should work independent of the order of
+  (* NOTE for crash-resilience a partition should be block aligned and
+     block sized, and the code should work independent of the order of
      page flushes *)
 
   (* NOTE sorted should always have unique keys; unsorted may not have
@@ -147,16 +139,6 @@ module Bucket(C:BUCKET_CONFIG) = struct
 
   let bucket_size_bytes = bucket_size_ints * Bigarray.kind_size_in_bytes Bigarray.int
 
-
-(*
-  let max_unsorted = 10 (* say; this is the number of keys; we
-                           also store the values as well *)
-
-  (* subtract 2 for the length fields: len_sorted, len_unsorted *)
-  let max_sorted = (bucket_size - (2*max_unsorted) - 2) / 2
-*)
-
-  (* FIXME what is the max_sorted, actually? *)
   let _ = assert(max_sorted >= max_unsorted)
 
   (** Positions/offsets within the buffer that we store certain info *)
@@ -186,6 +168,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
 
     let set_len_sorted n = arr.{ Ptr.len_sorted } <- n
 
+    (* FIXME could avoid sorted and unsorted subarrays, and just index in U and S *)
     let sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted)
 
     let len_unsorted () = arr.{ Ptr.len_unsorted }
@@ -216,8 +199,8 @@ module Bucket(C:BUCKET_CONFIG) = struct
     let find_sorted k = 
       Interpolate_.find 
         ~len:(len_sorted())
-        ~ks:(fun i -> sorted.{2*i})
-        ~vs:(fun i -> sorted.{2*i +1})
+        ~ks:S.ks
+        ~vs:S.vs
         k
 
     (** Just scan through unsorted, newest elts first *)
@@ -258,6 +241,11 @@ module Bucket(C:BUCKET_CONFIG) = struct
       trace(fun () -> "merge_unsorted");
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
+      (* FIXME the following is too harsh, since we may be deleting
+         some elements; one thing we can be sure is that a temporary
+         buffer of len max_sorted+max_unsorted can hold all possible
+         merged results; then we can split if the result is larger
+         than max_sorted *)
       assert(len1 + len2 <= max_sorted);
       (* copy unsorted into an array, and sort *)
       let kvs2 = unsorted_to_sorted [] in
@@ -266,6 +254,9 @@ module Bucket(C:BUCKET_CONFIG) = struct
          partition *)
       (* FIXME assert dst is within bucket_data *)
       let dst = Bigarray.Array1.sub arr (Ptr.sorted_start+2*max_unsorted) (2*len1) in
+      (* FIXME perhaps use a tmp buffer? what about concurrent read?
+         yes, need to use a tmp buffer; this also helps with knowing
+         the length of the result *)
       Bigarray.Array1.blit (Bigarray.Array1.sub sorted 0 (2*len1)) dst;
       (* now merge sorted with kvs2, placing elts back into sorted *)
       let ks1 i = dst.{ 2*i } in
@@ -313,8 +304,8 @@ module Bucket(C:BUCKET_CONFIG) = struct
          half in p1, half in p2 (p1 may duplicate some old entries
          that get overridden by entries in p2) *)
       let cut_point = (len1+len2+1) / 2 in
-      let ks1 i = sorted.{ 2*i } in
-      let vs1 i = sorted.{ 2*i +1 } in
+      let ks1 i = S.ks i in
+      let vs1 i = S.vs i in
       let ks2 i = kvs2.(i) |> fst in
       let vs2 i = kvs2.(i) |> snd in
       let count = ref 0 in
@@ -478,10 +469,12 @@ module Make(Config:CONFIG) = struct
     (* add_to_bucket     : bucket -> int -> int -> [ `Ok | `Split of bucket * int * bucket ]; *)
   }
 
+  let const_4GB = 4_294967296
+
   (* create with an initial partition *)
   let create_p ~fn ~partition = 
     Unix.(openfile fn [O_CREAT;O_RDWR; O_TRUNC] 0o640) |> fun fd -> 
-    Unix.truncate fn (4.0 *. 2.0**10.0 *. 2.0**10.0 *. 2.0**10.0 |> Int.of_float);
+    Unix.truncate fn (const_4GB);
     let data = Mmap.of_fd fd Bigarray.int in
     (* keep block 0 for header etc *)
     let max_r = partition |> Prt.to_list |> List.map snd |> List.fold_left max 1 in
