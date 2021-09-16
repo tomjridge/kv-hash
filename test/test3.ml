@@ -5,7 +5,7 @@ open Util
 
 let time () = Unix.time ()
 
-module Kv = Kv_hash.String_string_map.Make_2
+module Kv = Kv_hash.String_string_map
 
 let lim = 5_000_000
 
