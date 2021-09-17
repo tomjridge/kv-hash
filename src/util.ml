@@ -23,6 +23,9 @@ let trace (s:unit->string) =
   ignore(s); ()
 [@@warning "-27"]
 
+let warn (s:unit->string) = 
+  print_endline (s())
+
 
 (** This builds a comparator for Jane St. Base.Map. Not sure this is
    the intended procedure. *)
@@ -58,6 +61,7 @@ module Interpolate(S:sig
   open S
 
   let find ~(len:int) ~(ks:int->k) ~(vs:int->v) k =
+    match len = 0 with true -> None | false -> 
     let low_k = ks 0 in
     let high_k = ks (len -1) in
     match () with 

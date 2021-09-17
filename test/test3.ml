@@ -7,7 +7,7 @@ let time () = Unix.time ()
 
 module Kv = Kv_hash.String_string_map
 
-let lim = 5_000_000
+let lim = 1_000_000
 
 let go () = 
   Printf.printf "Test starts\n%!";

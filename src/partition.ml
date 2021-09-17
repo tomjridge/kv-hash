@@ -205,7 +205,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
 
     (** Just scan through unsorted, newest elts first *)
     let find_unsorted k = 
-      let len = len_sorted () in
+      let len = len_unsorted () in
       len -1 |> iter_k (fun ~k:kont i -> 
           match i < 0 with
           | true -> None
@@ -503,7 +503,7 @@ module Make(Config:CONFIG) = struct
     (* FIXME sync partition for reopen *)
     ()
 
-  let open_ ~fn:_ ~n:_ = failwith "FIXME"
+  let open_ ~fn:_ ~n:_ = failwith "FIXME partition.ml: open_"
 
   let mk_bucket ~data i = 
     let off = Config.blk_sz * i in
@@ -540,7 +540,7 @@ module Make(Config:CONFIG) = struct
     let _,bucket = find_bucket ~partition:t.partition ~data:t.data k in
     Bucket.find ~bucket k
 
-  let delete _t _k = failwith "FIXME"
+  let delete _t _k = failwith "FIXME partition.ml: delete"
 
   let export t = 
     let { partition; data; _ } = t in
@@ -583,12 +583,22 @@ module Test() = struct
   let _ = show t
 
   let v = (-1)
+
+  let _ = assert(None = find_opt t 0)
+  let _ = assert(None = find_opt t 1)
+  let _ = assert(None = find_opt t 20)
+  let _ = assert(None = find_opt t 100)
   
   let _ = insert t 0 v
   let _ = show t
+  let _ = assert(Some v = find_opt t 0)
+  let _ = assert(None   = find_opt t 1)
 
   let _ = insert t 1 v
   let _ = show t
+  let _ = assert(Some v = find_opt t 0)
+  let _ = assert(Some v  = find_opt t 1)
+  let _ = assert(None    = find_opt t 2)
 
   let _ = insert t 2 v
   let _ = show t

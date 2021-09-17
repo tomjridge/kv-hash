@@ -25,6 +25,8 @@ may be substantial overhead in the values file.
 
 *)
 
+open Util
+
 module type VALUES = 
 sig
   type t 
@@ -111,20 +113,35 @@ module With_int_map(Int_map:INT_MAP) = struct
     h
 
   let find_opt t k = 
+    trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     let k' = hash k in
-    (Hashtbl.find_opt t.deleted k) |> function 
-    | Some () ->  None
-    | None -> 
-      Int_map.find_opt t.int_map k' |> function
-      | None -> None
-      | Some v' -> 
-        Some(Values.read_value t.values ~off:v')
+    begin
+      (Hashtbl.find_opt t.deleted k) |> function 
+      | Some () ->  None
+      | None -> 
+        Int_map.find_opt t.int_map k' |> function
+        | None -> None
+        | Some v' -> 
+          Some(Values.read_value t.values ~off:v')
+    end |> fun r -> 
+    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+    r
+
+  let insert_hashed t hash v = 
+    trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
+    let k' = hash in
+    Values.append_value t.values v |> fun off -> 
+    Int_map.insert t.int_map k' off;
+    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+    ()
 
   let insert t k v =
+    trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     (Hashtbl.remove t.deleted k);
     let k' = hash k in
-    Values.append_value t.values v |> fun off -> 
-    Int_map.insert t.int_map k' off
+    insert_hashed t k' v;
+    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+    ()
 
   let delete t k =
     Hashtbl.replace t.deleted k ()
@@ -132,6 +149,29 @@ module With_int_map(Int_map:INT_MAP) = struct
     let k' = hash k in
     Int_map.delete t.int_map k'
 *)
+
+  (* for batch, we need the hash and insert_hashed functions so we can
+     pre-sort ops by hash of key, which improves subsequent
+     performance; for deletes, we just accumulate; we assume there are
+     no duplicate keys in ops *)
+  (* FIXME we don't have to sort... it is enough to partition using
+     the top-level partition, which should be much quicker *)
+  let batch t ops =
+    warn (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
+    ops |> List.filter_map (function
+        | (k,`Insert v) -> Some(hash k,v)
+        | (k,`Delete) -> delete t k; None) |> fun inserts -> 
+    let t1 = Unix.time () in
+    inserts |> List.sort (fun (h1,_) (h2,_) -> Int.compare h1 h2) |> fun inserts -> 
+    let t2 = Unix.time () in
+    Printf.printf "Sort took %f\n%!" (t2 -. t1);
+    inserts |> List.iter (fun (h,v) -> insert_hashed t h v);
+    warn (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+    
+
+    
+    
+    
 
 end
 
@@ -159,9 +199,11 @@ module Make_1 = struct
   module With_int_map_ = With_int_map(Int_map)
 
   let create ~fn = 
+    trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     Int_map.create ~fn ~n:10_000 |> fun int_map -> 
     let values = Values.create ~fn:(fn ^".values") in
     let deleted = Hashtbl.create 1000 in
+    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     { values; int_map; deleted }
 
   (* let open_ ~fn = failwith "FIXME" *)

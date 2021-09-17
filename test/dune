@@ -13,3 +13,13 @@
  (modules Test3)
  (libraries kv_hash))
 
+(executable
+ (name "test4")
+ (modules Test4)
+ (libraries kv_hash))
+
+(executable
+ (name "test5")
+ (modules Test5)
+ (libraries kv_hash threads))
+
