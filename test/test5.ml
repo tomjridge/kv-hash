@@ -2,6 +2,8 @@
 
 open Kv_hash.Util
 
+let trace (_f:unit -> string) = ()
+
 let h_len = 1024
 
 type t = {
@@ -32,15 +34,17 @@ let read_header t : header =
   Bigstringaf.to_string t.h |> fun s -> 
   Marshal.(from_string s 0)
 
+let buffer_len = 256
+
 (** Read an int at offset; off is updated; int is returned *)
-let read_int t (off:int ref) : int =
-  Mmap.sub t.m ~off:0 ~len:(!off+9) |> fun ba -> 
-  Bin_prot.Read.bin_read_int ba ~pos_ref:off
+let read_string t (off:int ref) : string =
+  Mmap.sub t.m ~off:0 ~len:(!off+buffer_len) |> fun ba -> 
+  Bin_prot.Read.bin_read_string ba ~pos_ref:off
 
 (** Write an int at offset off; return new offset *)
-let write_int m ~off ~i =
-  Mmap.sub m ~off:0 ~len:(off+9) |> fun ba -> 
-  Bin_prot.Write.bin_write_int ba ~pos:off i |> fun off' -> 
+let write_string m ~off ~str =
+  Mmap.sub m ~off:0 ~len:(off+buffer_len) |> fun ba -> 
+  Bin_prot.Write.bin_write_string ba ~pos:off str |> fun off' -> 
   off'
 
   
@@ -53,13 +57,13 @@ module Writer = struct
   }
 end
 
-let marshal_to_string x = Marshal.to_string x [No_sharing] 
+let print_every = 1_000_000
 
 include struct
   open Writer
 
   let append_int w k = 
-    write_int w.t.m ~off:w.h.len ~i:k |> fun off' -> 
+    write_string w.t.m ~off:w.h.len ~str:(string_of_int k) |> fun off' -> 
     w.h.len <- off';
     write_header w.t w.h;
     ()
@@ -70,13 +74,12 @@ include struct
     let w = { t=init; h } in
     Printf.printf "Writer thread starts\n%!";
     write_header w.t h;
-    Printf.printf "%s\n%!" __LOC__;
     while(true) do      
       let k = !count in
       incr count;
-      Printf.printf "Writing     %d\n%!" k;
+      trace(fun () -> Printf.sprintf "Writing     %d\n%!" k);
+      (if k mod print_every = 0 then Printf.printf "Writer      %d\n%!" k);
       append_int w k;
-      (* Printf.printf "Written\n"; *)
       Thread.yield()
     done
 end
@@ -97,12 +100,14 @@ let reader () =
     () |> iter_k (fun ~k:kont () -> 
         match !(r.off) < h.len with
         | false -> 
-          Printf.printf "Reader read nothing\n%!";
+          trace(fun () -> Printf.sprintf "Reader read nothing\n%!");
           Thread.yield();
           ()
         | true -> 
-          read_int r.t r.off |> fun i -> 
-          Printf.printf "Reader read %d\n%!" i;
+          read_string r.t r.off |> fun s -> 
+          let k = int_of_string s in
+          trace(fun () -> Printf.sprintf "Reader read %d\n%!" k);
+          (if k mod print_every = 0 then Printf.printf "Reader read %d\n%!" k);
           kont ());
   done
   
