@@ -164,6 +164,8 @@ module With_int_map(Int_map:INT_MAP) = struct
     let t1 = Unix.time () in
     inserts |> List.sort (fun (h1,_) (h2,_) -> Int.compare h1 h2) |> fun inserts -> 
     let t2 = Unix.time () in
+    (* FIXME also want to remove new inserts from deleted, and FIXME
+       need to be sure order of deletes and inserts *)
     Printf.printf "Sort took %f\n%!" (t2 -. t1);
     inserts |> List.iter (fun (h,v) -> insert_hashed t h v);
     warn (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
