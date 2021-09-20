@@ -13,17 +13,22 @@ type config = {
 module Control = struct
   type t = {
     active_log: int; (* 0 or 1 *)
-    generation: int; (* increasing int *)
+    active_off: int;
+    active_gen: int; (* increasing int *)
     last_merged: int; (* which log generation was last merged; 0
                          indicates "None"; usually we don't rotate
                          logs till previous log has merged *)
+    (* merge_enabled: int; *)
+    want_merge : int (* which generation we want merged FIXME; 0 for "no generation" *)
   }
 
   let active_log = 0
-  let generation = 1
-  let last_merged = 2
+  let active_off = 1
+  let active_gen = 2
+  let last_merged = 3
+  let want_merge = 4
 
-  let len = 3
+  let len = 5
 
 (*
   let write arr t = 
@@ -34,12 +39,44 @@ module Control = struct
 
   let read arr = {
     active_log=arr.(active_log);
-    generation=arr.(generation);
-    last_merged=arr.(last_merged)
+    active_off=arr.(active_off);
+    active_gen=arr.(active_gen);
+    last_merged=arr.(last_merged);
+    want_merge=arr.(want_merge);
   }
 
 end
 
+(* NOTE Used by merge process *)
+module From_config = struct
+
+  type t = {
+    ctl_fd      : Unix.file_descr;
+    ctl_mmap    : Mmap.int_mmap;
+    ctl_buf     : Mmap.int_bigarray;
+    log_fds     : Unix.file_descr Array.t;
+    log_mmaps   : Mmap.char_mmap Array.t;
+    log_bufs    : Bigstringaf.t Array.t;
+  }
+
+  let create_fd fn = Unix.(openfile fn [O_CREAT;O_TRUNC;O_RDWR] 0o640)
+
+  let create_mmap fd = Mmap.(of_fd fd char_kind)
+
+  let create ~config = 
+    let max_log_len = 2_000_000 in (* FIXME only for testing *)
+    (* truncate log1 and log2; open control; write initial control info to control *)
+    let ctl_fd = create_fd config.control_filename in
+    let ctl_mmap = ctl_fd |> fun fd -> Mmap.(of_fd fd int_kind) in
+    let ctl_buf = Mmap.sub ctl_mmap ~off:0 ~len:Control.len in
+    let log_fns = [| config.log0_filename; config.log1_filename |] in    
+    let log_fds = log_fns |> Array.map create_fd in
+    let log_mmaps = log_fds |> Array.map create_mmap in
+    let log_bufs = log_mmaps |> Array.map (fun m -> Mmap.sub m ~off:0 ~len:max_log_len) in
+    { ctl_fd;ctl_mmap;ctl_buf;log_fds;log_mmaps;log_bufs }
+end
+
+(* FIXME may be cleaner to store off and generation for each of the logs *)
 
 type ('k,'v,'op) t = {
   ctl_fd      : Unix.file_descr;
@@ -91,16 +128,13 @@ module Make_writer(S:sig type k[@@deriving bin_io] type v[@@deriving bin_io] end
 
   let const_1k = 1024[@@warning "-32"]
 
-  let create_fd fn = Unix.(openfile fn [O_CREAT;O_TRUNC;O_RDWR] 0o640)
-
-  let create_mmap fd = Mmap.(of_fd fd char_kind)
-
   let write_ctl t = 
     let arr = t.ctl_buf in
     (* FIXME what happens if this is not atomic? *)
     Control.(
       arr.{active_log} <- t.active_log;
-      arr.{generation} <- t.active_gen;
+      arr.{active_off} <- t.active_off; 
+      arr.{active_gen} <- t.active_gen;
       ())
 
   let create_contents () = Hashtbl.create 1024
@@ -111,13 +145,8 @@ module Make_writer(S:sig type k[@@deriving bin_io] type v[@@deriving bin_io] end
     assert(testing);
     let max_log_len = 2_000_000 in (* FIXME only for testing *)
     (* truncate log1 and log2; open control; write initial control info to control *)
-    let ctl_fd = create_fd config.control_filename in
-    let ctl_mmap = ctl_fd |> fun fd -> Mmap.(of_fd fd int_kind) in
-    let ctl_buf = Mmap.sub ctl_mmap ~off:0 ~len:Control.len in
-    let log_fns = [| config.log0_filename; config.log1_filename |] in    
-    let log_fds = log_fns |> Array.map create_fd in
-    let log_mmaps = log_fds |> Array.map create_mmap in
-    let log_bufs = log_mmaps |> Array.map (fun m -> Mmap.sub m ~off:0 ~len:max_log_len) in
+    From_config.create ~config 
+    |> fun { ctl_fd;ctl_mmap;ctl_buf;log_fds;log_mmaps;log_bufs } ->
     let log_contents = [| create_contents (); create_contents () |] in 
     let active_log = 0 in
     let active_off = 0 in
