@@ -23,3 +23,11 @@
  (modules Test5)
  (libraries kv_hash threads))
 
+(executable
+ (name "test6") ; frontend
+ (modules Test6)
+ (libraries kv_hash threads))
+
+(alias
+ (name "executables")
+ (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe))
