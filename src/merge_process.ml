@@ -18,7 +18,9 @@ processes. The simplest way to do this is just to serialize the partition to a f
 (** Operations are insert: (k,`Insert v), or delete: (k,`Delete) *)
 type op = string * [ `Insert of string | `Delete ]
 
-module Make(Partition: Partition_intf.PARTITION with type k = int and type r = int) = struct
+module Partition_ = Partition.Partition_ii
+
+module Make = struct
 
   [@@@warning "-26-27"]
 
@@ -28,11 +30,14 @@ module Make(Partition: Partition_intf.PARTITION with type k = int and type r = i
   let merge_and_exit 
       ~generation 
       ~mark_merged
-      ~(partition:Partition.t) 
+      ~(phash:String_string_map.t) 
       ~(ops:op list) 
-      ~(batch:op list -> unit)
     = 
     let partition_changed = ref false in
+    let partition = 
+      String_string_map.get_p_int_map phash |> fun p_int_map -> 
+      Partition
+    in
     Partition.set_split_hook partition (fun () -> partition_changed := true);
     batch ops;
     begin
@@ -50,3 +55,4 @@ module Make(Partition: Partition_intf.PARTITION with type k = int and type r = i
     Stdlib.exit 0
 
 end
+

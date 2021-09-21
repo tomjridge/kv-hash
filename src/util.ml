@@ -188,3 +188,10 @@ let char_kind : (char,Bigarray.int8_unsigned_elt) kind = Bigarray.Char
 
 let int_kind : (int,Bigarray.int_elt) kind = Bigarray.Int
 
+
+let log_fn gen = "log_"^(string_of_int gen)
+
+let part_fn gen = "part_"^(string_of_int gen)
+
+
+

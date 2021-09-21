@@ -12,7 +12,11 @@ module type S = sig
   val batch : t -> op list -> unit
   val close : t -> unit
     
-  (** Private operation to reload partition from disk when store
+
+  type phash
+  val get_phash : t -> phash
+
+(*  (** Private operation to reload partition from disk when store
      mutated by a concurrent process *)
-  val reload_partition : t -> fn:string -> unit
+  val reload_partition : t -> fn:string -> unit *)
 end

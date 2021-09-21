@@ -47,11 +47,6 @@ module Log_file_w = struct
 
 end
 
-let log_fn gen = "log_"^(string_of_int gen)
-
-
-
-
 module Log_file_r = struct
 
   type t = {
@@ -143,7 +138,7 @@ module Writer = struct
     mutable curr_log    : Log_file_w.t;
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
-    mutable phash       : String_string_map.t;
+    mutable pmap        : String_string_map.t;
   }
   (** check_merge: whether we need to check the old merge has
      completed before launching a new one; the int is the pid *)
@@ -154,15 +149,15 @@ module Writer = struct
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
-    let phash = String_string_map.create ~fn:phash_fn in
-    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;phash }
+    let pmap = String_string_map.create ~fn:phash_fn in
+    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap }
 
   
   let merge_and_exit 
       ~generation 
       ~mark_merged 
       ~ops 
-      ~phash = ()[@@warning "-27"]
+      ~pmap = ()[@@warning "-27"]
 
   let switch_logs t = 
     (* need to switch logs; first check for completion of a previous
@@ -177,8 +172,17 @@ module Writer = struct
         (* Check also that last_merge is as we expect *)
         assert(Control.get_field t.ctl Control_fields.last_merg = gen);
         t.check_merge <- None;
-        (* FIXME also need to update the new partition *)
-        ()
+        (* Check if part_1234 exists, and if so, reload partition *)
+        begin
+          Sys.file_exists (part_fn gen) |> function
+          | false -> ()
+          | true -> 
+            warn(fun () -> Printf.sprintf "Reloading partition from file part_%d\n" gen);
+            String_string_map.get_phash t.pmap |> fun phash -> 
+            String_string_map_private.Make_1.Phash.reload_partition 
+              phash
+              ~fn:(part_fn gen)
+        end;
     end;
     begin 
       Unix.fork () |> function 
@@ -187,7 +191,7 @@ module Writer = struct
           ~generation:t.gen 
           ~mark_merged:(fun gen -> Control.set_field t.ctl F.last_merg gen)
           ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq)
-          ~phash:t.phash
+          ~pmap:t.pmap
       | pid -> (* parent *)
         t.check_merge <- Some{pid;gen=t.gen};          
         () (* NOTE will continue after this begin..end block *)
@@ -196,7 +200,7 @@ module Writer = struct
     t.prev_map <- t.curr_map;
     t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
-    t.phash <- t.phash; (* FIXME need to read partition from disk and update *)
+    t.pmap <- t.pmap; (* FIXME need to read partition from disk and update *)
     (* update gen last *)
     t.gen <- new_gen;
     Control.(set_field t.ctl F.curr t.gen); 

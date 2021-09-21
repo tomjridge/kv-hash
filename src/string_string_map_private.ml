@@ -27,20 +27,21 @@ may be substantial overhead in the values file.
 
 open Util
 
+module Partition_ = Partition.Partition_ii
 
 (** A [string->string] map is a values file and an [int->int] map. The
    [int->int] map is really a map from hash(key) to offset(of value in
    values file). *)
 type 'int_map t = {
   values: Values.t;
-  mutable int_map: 'int_map; (* mutable because RO instances need to
+  mutable p_int_map: 'int_map; (* mutable because RO instances need to
                                 sync this from disk after a merge *)
   deleted: (string,unit)Hashtbl.t (* FIXME hack to support delete quickly *)
 }
 
 
 (** What we need from the large [int->int] map *)
-module type INT_MAP = sig 
+module type PHASH = sig 
     type t
     val find_opt : t -> int -> int option
     val insert   : t -> int -> int -> unit
@@ -48,7 +49,7 @@ module type INT_MAP = sig
   end
 
   
-module With_int_map(Int_map:INT_MAP) = struct
+module With_phash(Phash:PHASH) = struct
 
   let hash (s:string) = 
     let h = XXHash.XXH64.hash s |> Int64.to_int in
@@ -63,7 +64,7 @@ module With_int_map(Int_map:INT_MAP) = struct
       (Hashtbl.find_opt t.deleted k) |> function 
       | Some () ->  None
       | None -> 
-        Int_map.find_opt t.int_map k' |> function
+        Phash.find_opt t.p_int_map k' |> function
         | None -> None
         | Some v' -> 
           Some(Values.read_value t.values ~off:v')
@@ -75,7 +76,7 @@ module With_int_map(Int_map:INT_MAP) = struct
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     let k' = hash in
     Values.append_value t.values v |> fun off -> 
-    Int_map.insert t.int_map k' off;
+    Phash.insert t.p_int_map k' off;
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     ()
 
@@ -91,7 +92,7 @@ module With_int_map(Int_map:INT_MAP) = struct
     Hashtbl.replace t.deleted k ()
 (*
     let k' = hash k in
-    Int_map.delete t.int_map k'
+    Phash.delete t.int_map k'
 *)
 
   (* for batch, we need the hash and insert_hashed functions so we can
@@ -116,6 +117,8 @@ module With_int_map(Int_map:INT_MAP) = struct
 
 end
 
+
+
 (** Putting it all together.
 
 To create given filename fn:
@@ -135,33 +138,38 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Persistent_int_map = Persistent_hashtable.Make_2(Config)
+  module Phash = Persistent_hashtable.Make_2(Config)
 
-  module With_int_map_ = With_int_map(Persistent_int_map)
+  module With_phash_ = With_phash(Phash)
 
   let create ~fn = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    Persistent_int_map.create ~fn ~n:10_000 |> fun int_map -> 
+    Phash.create ~fn ~n:10_000 |> fun p_int_map -> 
     let values = Values.create ~fn:(fn ^".values") in
     let deleted = Hashtbl.create 1000 in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
-    { values; int_map; deleted }
+    { values; p_int_map; deleted }
 
   (* let open_ ~fn = failwith "FIXME" *)
     
-  include With_int_map_  
+  include With_phash_  
       
   let close t = 
     Values.close t.values;
-    Persistent_int_map.close t.int_map
+    Phash.close t.p_int_map
 
-  let reload_partition t ~fn = Persistent_int_map.reload_partition t.int_map ~fn
+  (* let reload_partition t ~fn = Persistent_int_map.reload_partition t.int_map ~fn *)
+
+  type phash = Phash.t
+
+  let get_phash t = t.p_int_map
       
-  type nonrec t = Persistent_int_map.t t
+  type nonrec t = Phash.t t
 end
 
 
 module type S = String_string_map_intf.S
 
-module Make_2 : S = Make_1
+module Make_2 : S with type phash := Make_1.Phash.t
+= Make_1
 

@@ -24,6 +24,10 @@ module type S = sig
      modification of store by another process *)
   val reload_partition: t -> fn:string -> unit
 
+  type partition
+
+  val get_partition: t -> partition
+
   val export : t -> export_t
 
   val show : t -> unit

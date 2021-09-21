@@ -131,3 +131,19 @@ end
 
 module Make_partition = Make_2
 
+
+(* Partition, k=int, r=int *)
+module Partition_ii = struct
+
+  module S = struct
+    type k = int
+    let compare = Int.compare
+    let min_key = Int.zero
+    type r = int  (* r is the block offset within the data file, measured in blocks *)
+  end
+
+  module Partition = Make_partition(S)
+
+  include Partition
+
+end

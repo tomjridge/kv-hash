@@ -1,13 +1,16 @@
 open Bigarray
 open Util
-open Partition
 open Bucket
 open Persistent_hashtable_intf
+
+module Partition_ = Partition.Partition_ii
+
 
 module type CONFIG = sig
   include BUCKET_CONFIG
   val blk_sz : int (* in bytes *)
 end
+
 
 module Make_1(Config:CONFIG) = struct
 
@@ -34,19 +37,10 @@ module Make_1(Config:CONFIG) = struct
       ]
     |> print_endline
 
-
-  module S = struct
-    type k = int
-    let compare = Int.compare
-    let min_key = Int.zero
-    type r = int  (* r is the block offset within the data file, measured in blocks *)
-  end
-
   type k = int
   type r = int
 
-  module Partition = Make_partition(S)
-  module Prt = Partition      
+  module Prt = Partition_      
 
   (** Create an initial n-way partition, with values provided by alloc *)
   let initial_partitioning ~alloc ~n = 
@@ -161,13 +155,19 @@ module Make_1(Config:CONFIG) = struct
     let ic = open_in_bin fn in
     let partition = Prt.read ic in
     t.partition <- partition
-    
+
+  let get_partition t = t.partition
 
 
 end (* Make *)
 
-module Make_2(Config:CONFIG) : Persistent_hashtable_intf.S with type k=int and type r=int
-  = Make_1(Config)
+module type S = 
+  Persistent_hashtable_intf.S 
+  with type k=int 
+   and type r=int
+   and type partition := Partition_.t
+
+module Make_2(Config:CONFIG) : S = Make_1(Config)
 
 
 module Test() = struct
