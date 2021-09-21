@@ -20,6 +20,10 @@ module type S = sig
 
   val find_opt : t -> k -> r option
 
+  (** Private operation to reload a partition after concurrent
+     modification of store by another process *)
+  val reload_partition: t -> fn:string -> unit
+
   val export : t -> export_t
 
   val show : t -> unit

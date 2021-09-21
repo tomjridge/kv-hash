@@ -11,4 +11,8 @@ module type S = sig
   (* val delete : t -> string -> unit FIXME needs implementing *)
   val batch : t -> op list -> unit
   val close : t -> unit
+    
+  (** Private operation to reload partition from disk when store
+     mutated by a concurrent process *)
+  val reload_partition : t -> fn:string -> unit
 end

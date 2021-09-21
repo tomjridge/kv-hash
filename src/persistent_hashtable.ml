@@ -62,7 +62,7 @@ module Make_1(Config:CONFIG) = struct
     data              : (int,int_elt) Mmap.t; (* all the data in the file *)
     alloc_counter     : int ref;
     alloc             : unit -> int;
-    partition         : Prt.t; (* NOTE mutable *)
+    mutable partition : Prt.t; (* NOTE mutable *)
     (* add_to_bucket     : bucket -> int -> int -> [ `Ok | `Split of bucket * int * bucket ]; *)
   }
 
@@ -157,6 +157,12 @@ module Make_1(Config:CONFIG) = struct
       ]
     |> print_endline
     
+  let reload_partition t ~fn = 
+    let ic = open_in_bin fn in
+    let partition = Prt.read ic in
+    t.partition <- partition
+    
+
 
 end (* Make *)
 

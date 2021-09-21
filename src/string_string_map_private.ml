@@ -135,13 +135,13 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Int_map = Persistent_hashtable.Make_2(Config)
+  module Persistent_int_map = Persistent_hashtable.Make_2(Config)
 
-  module With_int_map_ = With_int_map(Int_map)
+  module With_int_map_ = With_int_map(Persistent_int_map)
 
   let create ~fn = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    Int_map.create ~fn ~n:10_000 |> fun int_map -> 
+    Persistent_int_map.create ~fn ~n:10_000 |> fun int_map -> 
     let values = Values.create ~fn:(fn ^".values") in
     let deleted = Hashtbl.create 1000 in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
@@ -153,9 +153,11 @@ module Make_1 = struct
       
   let close t = 
     Values.close t.values;
-    Int_map.close t.int_map
+    Persistent_int_map.close t.int_map
+
+  let reload_partition t ~fn = Persistent_int_map.reload_partition t.int_map ~fn
       
-  type nonrec t = Int_map.t t
+  type nonrec t = Persistent_int_map.t t
 end
 
 

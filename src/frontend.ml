@@ -232,3 +232,4 @@ module Writer = struct
 
 end
 
+module Test() = struct end
