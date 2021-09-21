@@ -2,18 +2,14 @@ open Bigarray
 open Util
 open Partition
 open Bucket
-
-type export_t = {
-  partition: (int*int) list;
-  buckets: exported_bucket list
-}
+open Persistent_hashtable_intf
 
 module type CONFIG = sig
   include BUCKET_CONFIG
   val blk_sz : int (* in bytes *)
 end
 
-module Make(Config:CONFIG) = struct
+module Make_1(Config:CONFIG) = struct
 
   open Config
 
@@ -45,6 +41,9 @@ module Make(Config:CONFIG) = struct
     let min_key = Int.zero
     type r = int  (* r is the block offset within the data file, measured in blocks *)
   end
+
+  type k = int
+  type r = int
 
   module Partition = Make_partition(S)
   module Prt = Partition      
@@ -161,6 +160,9 @@ module Make(Config:CONFIG) = struct
 
 end (* Make *)
 
+module Make_2(Config:CONFIG) : Persistent_hashtable_intf.S with type k=int and type r=int
+  = Make_1(Config)
+
 
 module Test() = struct
   
@@ -171,7 +173,7 @@ module Test() = struct
 
   end
 
-  module M = Make(Config)
+  module M = Make_1(Config)
   open M
 
   let init_partition = [(0,1);(20,2);(40,3);(60,4);(80,5);(100,5)] |> Prt.of_list
@@ -234,7 +236,7 @@ module Test2() = struct
     let blk_sz = 4096
   end
 
-  module M = Make(Config)
+  module M = Make_1(Config)
   open M
 
   let t = create ~fn:"test.db" ~n:10_000

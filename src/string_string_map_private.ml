@@ -95,7 +95,7 @@ module type INT_MAP = sig
     type t
     val find_opt : t -> int -> int option
     val insert   : t -> int -> int -> unit
-    val delete   : t -> int -> unit
+    (* val delete   : t -> int -> unit FIXME currently hacked using lookaside hashtable *)
   end
 
 type 'int_map t = {
@@ -196,7 +196,7 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Int_map = Persistent_hashtable.Make(Config)
+  module Int_map = Persistent_hashtable.Make_2(Config)
 
   module With_int_map_ = With_int_map(Int_map)
 
