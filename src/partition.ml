@@ -40,8 +40,21 @@ module type S = sig
 end
 
 
-module Make_partition(S:S) 
-  : PARTITION with type k=S.k and type r=S.r 
+module type PURE_PARTITION = sig
+  type k
+  type r
+  type t
+  val find    : t -> k -> (k * r)
+  val split   : t -> k1:k -> r1:r -> k2:k -> r2:r -> t
+  val to_list : t -> (k * r) list
+  val of_list : (k * r) list -> t
+
+  val write      : t -> out_channel -> unit
+  val read       : in_channel -> t
+end
+
+
+module Make_1(S:S) : PURE_PARTITION with type k=S.k and type r=S.r 
 = struct
   include S
 
@@ -54,26 +67,27 @@ module Make_partition(S:S)
 
   module Map = Base.Map
 
+
   (* A partition is just a map from k to r *)
   type partition = (k,r,comparator_witness) Map.t 
   type t = partition
 
-  (* this primed version works with k options *)
   let to_list b : (k * r) list = b |> Map.to_alist 
-
+                                 
   let of_list krs = 
     krs |> Map.of_alist_exn comparator |> fun p -> 
     assert(Map.mem p min_key);
     p
 
-  let find k b : k * r = 
+  let find t k : k * r = 
     (* find the greatest key <= k *)
-    Map.closest_key b `Less_or_equal_to k |> function
+    Map.closest_key t `Less_or_equal_to k |> function
     | None -> failwith "find: impossible: min_key must be a member"
     | Some (k1,r) -> (k1,r)
 
   (* split a partition (k1,_) into (k1,r1) (k2,r2) *)
-  let split (p:partition) ~k1 ~r1 ~k2 ~r2 =
+  let split t ~k1 ~r1 ~k2 ~r2 =
+    let p = t in
     assert(Map.mem p k1);
     assert(not (Map.mem p k2));
     let p = Map.change p k1 
@@ -83,11 +97,51 @@ module Make_partition(S:S)
     Map.set p ~key:k2 ~data:r2 |> fun p -> 
     p
 
-  (* FIXME prefer non-marshalling for persistence *)
-  let write t oc =
-    output_value oc (to_list t)
+  (* FIXME prefer bin_prot for persistence *)
+  let write t oc = output_value oc (to_list t)
 
   let read ic = input_value ic |> of_list
+end
+
+
+(** Mutable partitions, with split hook *)
+module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r 
+= struct
+  include S
+
+  module Pure = Make_1(S)
+
+  (* default *)
+  let split_hook = fun () -> ()
+
+  type t = {
+    mutable partition:Pure.t;
+    mutable split_hook:unit->unit;
+  }
+
+  let to_list t : (k * r) list = t.partition |> Pure.to_list
+                                 
+  let of_list krs = 
+    Pure.of_list krs |> fun p -> 
+    {partition=p;split_hook}
+
+  let find t k : k * r = Pure.find t.partition k
+
+  (* split a partition (k1,_) into (k1,r1) (k2,r2) *)
+  let split t ~k1 ~r1 ~k2 ~r2 =
+    Pure.split t.partition ~k1 ~r1 ~k2 ~r2 |> fun p -> 
+    t.partition <- p;
+    t.split_hook ();
+    ()
+
+  let set_split_hook t f = t.split_hook <- f
+
+  (* FIXME prefer bin_prot for persistence *)
+  let write t oc = Pure.write t.partition oc
+
+  let read ic = 
+    Pure.read ic |> fun p -> 
+    { partition=p;split_hook }
 end
 
 

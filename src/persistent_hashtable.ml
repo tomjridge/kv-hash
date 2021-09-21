@@ -62,7 +62,7 @@ module Make_1(Config:CONFIG) = struct
     data              : (int,int_elt) Mmap.t; (* all the data in the file *)
     alloc_counter     : int ref;
     alloc             : unit -> int;
-    mutable partition : Prt.t;
+    partition         : Prt.t; (* NOTE mutable *)
     (* add_to_bucket     : bucket -> int -> int -> [ `Ok | `Split of bucket * int * bucket ]; *)
   }
 
@@ -115,7 +115,7 @@ module Make_1(Config:CONFIG) = struct
     Bucket_.add_to_bucket ~alloc_bucket:(fun () -> alloc_bucket t) ~bucket k v
 
   let find_bucket ~partition ~data k = 
-    Prt.find k partition |> fun (k,r) -> 
+    Prt.find partition k |> fun (k,r) -> 
     (* r is the partition offset within the store *)
     k,mk_bucket ~data r
 
@@ -130,7 +130,7 @@ module Make_1(Config:CONFIG) = struct
     | `Ok -> ()
     | `Split(b1,k2,b2) -> 
       trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
-      t.partition <- Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
+      Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
       ()  
     
   let find_opt t k = 
