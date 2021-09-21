@@ -196,7 +196,7 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Int_map = Partition.Make(Config)
+  module Int_map = Persistent_hashtable.Make(Config)
 
   module With_int_map_ = With_int_map(Int_map)
 

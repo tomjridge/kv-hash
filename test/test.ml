@@ -1,3 +1,3 @@
 (** Test executable *)
 
-module X = Kv_hash.Partition.Test()
+module X = Kv_hash.Persistent_hashtable.Test()
