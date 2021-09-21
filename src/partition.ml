@@ -39,21 +39,6 @@ module type S = sig
   type r
 end
 
-
-module type PURE_PARTITION = sig
-  type k
-  type r
-  type t
-  val find    : t -> k -> (k * r)
-  val split   : t -> k1:k -> r1:r -> k2:k -> r2:r -> t
-  val to_list : t -> (k * r) list
-  val of_list : (k * r) list -> t
-
-  val write      : t -> out_channel -> unit
-  val read       : in_channel -> t
-end
-
-
 module Make_1(S:S) : PURE_PARTITION with type k=S.k and type r=S.r 
 = struct
   include S
@@ -144,4 +129,5 @@ module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r
     { partition=p;split_hook }
 end
 
+module Make_partition = Make_2
 

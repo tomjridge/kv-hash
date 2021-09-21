@@ -27,7 +27,7 @@ module Make(Partition: Partition_intf.PARTITION with type k = int and type r = i
      number), and call set_generation *)
   let merge_and_exit 
       ~generation 
-      ~set_generation 
+      ~mark_merged
       ~(partition:Partition.t) 
       ~(ops:op list) 
       ~(batch:op list -> unit)
@@ -44,7 +44,7 @@ module Make(Partition: Partition_intf.PARTITION with type k = int and type r = i
         let oc = open_out fn in
         Partition.write partition oc;
         close_out_noerr oc;
-        set_generation generation;
+        mark_merged generation;
         ()
     end;    
     Stdlib.exit 0

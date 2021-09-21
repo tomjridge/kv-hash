@@ -159,3 +159,32 @@ let merge (type k v) ~ks1 ~vs1 ~len1 ~ks2 ~vs2 ~len2 ~set =
   Merge.merge
 
 
+
+
+(** Write to mmap using a bin_writer; allocate len space initially; if
+   not enough space, increase the buffer size and try again. *)
+let write_increasing ~(bin_write_v:_ Bin_prot.Write.writer) ~len ~mmap ~off ~v =
+  len |> iter_k (fun ~k len -> 
+      try
+        bin_write_v (Mmap.sub mmap ~off ~len) ~pos:0 v (* returns length of written value *)
+      with Bin_prot.Common.Buffer_short -> k (len*2))
+
+let read_increasing ~(bin_read_v:_ Bin_prot.Read.reader) ~len ~mmap ~off =
+  len |> iter_k (fun ~k len -> 
+      try
+        bin_read_v (Mmap.sub mmap ~off ~len) ~pos_ref:(ref 0)
+      with Bin_prot.Common.Buffer_short -> k (len*2))
+      
+  
+
+type char_bigarray = (char,Bigarray.int8_unsigned_elt,Bigarray.c_layout)Bigarray.Array1.t
+
+type int_bigarray = (int,Bigarray.int_elt,Bigarray.c_layout)Bigarray.Array1.t
+
+(** The kind of the mmap'ed array; see Bigarray.kind *)
+type ('a,'b) kind = ('a,'b) Bigarray.kind
+
+let char_kind : (char,Bigarray.int8_unsigned_elt) kind = Bigarray.Char
+
+let int_kind : (int,Bigarray.int_elt) kind = Bigarray.Int
+
