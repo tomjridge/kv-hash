@@ -14,13 +14,39 @@ processes. The simplest way to do this is just to serialize the partition to a f
 
 [@@@warning "-32"]
 
-module Make(S:sig 
-    val generation: int
 
-    module Partition : Partition_intf.PARTITION with type k = int and type r = int
-    val partition: Partition.t
-  end) = struct
+(** Operations are insert: (k,`Insert v), or delete: (k,`Delete) *)
+type op = string * [ `Insert of string | `Delete ]
 
-  
+module Make(Partition: Partition_intf.PARTITION with type k = int and type r = int) = struct
+
+  [@@@warning "-26-27"]
+
+  (* perform the merge; if partition has changed, write to file
+     "partition_1234" (with 1234 replaced by the next generation
+     number), and call set_generation *)
+  let merge_and_exit 
+      ~generation 
+      ~set_generation 
+      ~(partition:Partition.t) 
+      ~(ops:op list) 
+      ~(batch:op list -> unit)
+    = 
+    let partition_changed = ref false in
+    Partition.set_split_hook partition (fun () -> partition_changed := true);
+    batch ops;
+    begin
+      match !partition_changed with
+      | false -> ()
+      | true -> 
+        let generation = generation + 1 in
+        let fn = "partition_"^(string_of_int generation) in
+        let oc = open_out fn in
+        Partition.write partition oc;
+        close_out_noerr oc;
+        set_generation generation;
+        ()
+    end;    
+    Stdlib.exit 0
 
 end
