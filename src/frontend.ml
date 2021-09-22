@@ -161,7 +161,11 @@ module Writer_1 = struct
       | None -> ()
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
+        let t1 = Unix.time () in
+        warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
         Unix.waitpid [] pid |> fun (_pid,status) -> 
+        let t2 = Unix.time () in
+        warn (fun () -> Printf.sprintf "Wait completed in %f\n%!" (t2 -. t1));
         (* NOTE child merge process guaranteed to be finished at this point *)
         assert(status = WEXITED 0);
         (* Check also that last_merge is as we expect *)
@@ -182,6 +186,12 @@ module Writer_1 = struct
     begin 
       Unix.fork () |> function 
       | 0 -> (* child *) 
+        let t1 = Unix.time () in
+        warn (fun () -> Printf.sprintf "Merge started\n%!");
+        Stdlib.at_exit (fun () -> 
+            let t2 = Unix.time () in
+            warn (fun () -> Printf.sprintf "Merge process terminated in %f\n%!" (t2 -. t1));
+            ());            
         Merge_process.merge_and_exit 
           ~merge_nonce:t.gen
           ~post_merge_hook:(fun gen -> Control.set_field t.ctl F.last_merged_log gen)
@@ -247,7 +257,7 @@ module Writer = Writer_2
 
 module Test() = struct 
 
-  let lim = 1_000_000
+  let lim = 100_000_000
 
   let _ = 
     Printf.printf "%s: test starts\n%!" __MODULE__;
@@ -257,6 +267,7 @@ module Test() = struct
           match i < lim with
           | false -> ()
           | true -> 
+            (if i mod 1_000_000 = 0 then Printf.printf "Reached %d\n%!" i);
             Writer.insert t (string_of_int i) (string_of_int i);
             kont (i+1))
     end;

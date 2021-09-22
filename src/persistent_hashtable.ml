@@ -151,9 +151,14 @@ module Make_1(Config:CONFIG) = struct
       ]
     |> print_endline
     
-  let reload_partition t ~fn = 
+  let reload_partition t ~fn =     
     let ic = open_in_bin fn in
     let partition = Prt.read ic in
+    let max_r = 
+      Partition_.to_list partition |> fun krs -> 
+      krs |> List.map snd |> List.fold_left max 0
+    in
+    t.alloc_counter := 1+max_r; (* FIXME or max_r? *)
     t.partition <- partition
 
   let get_partition t = t.partition
