@@ -30,16 +30,16 @@ module Make = struct
   let merge_and_exit 
       ~generation 
       ~mark_merged
-      ~(phash:String_string_map.t) 
+      ~(pmap:String_string_map.t) 
       ~(ops:op list) 
     = 
     let partition_changed = ref false in
     let partition = 
-      String_string_map.get_p_int_map phash |> fun p_int_map -> 
-      Partition
+      String_string_map.get_phash pmap |> 
+      String_string_map_private.Make_1.Phash.get_partition      
     in
-    Partition.set_split_hook partition (fun () -> partition_changed := true);
-    batch ops;
+    Partition_.set_split_hook partition (fun () -> partition_changed := true);
+    String_string_map.batch pmap ops;
     begin
       match !partition_changed with
       | false -> ()
@@ -47,7 +47,7 @@ module Make = struct
         let generation = generation + 1 in
         let fn = "partition_"^(string_of_int generation) in
         let oc = open_out fn in
-        Partition.write partition oc;
+        Partition_.write partition oc;
         close_out_noerr oc;
         mark_merged generation;
         ()

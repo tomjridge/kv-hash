@@ -168,6 +168,7 @@ module Writer = struct
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
         Unix.waitpid [] pid |> fun (_pid,status) -> 
+        (* NOTE child merge process guaranteed to be finished at this point *)
         assert(status = WEXITED 0);
         (* Check also that last_merge is as we expect *)
         assert(Control.get_field t.ctl Control_fields.last_merg = gen);
