@@ -14,14 +14,14 @@ let const_1k = 1024[@@warning "-32"]
 
 
 module KV = struct
-  open Bin_prot.Std
-  type k = string[@@deriving bin_io]
-  type v = string[@@deriving bin_io]
+  (* open Bin_prot.Std *)
+  type k = string
+  type v = string
 end
 
 module Op = struct
   open KV
-  type op = Insert of k*v | Delete of k [@@deriving bin_io]
+  type op = k * [`Insert of v | `Delete ]
 end    
 open Op
 
@@ -84,9 +84,10 @@ curr - which log generation is being written to
 last_merge - which log generation was last merged; -1 indicates "None";
 usually we don't switch from current log till previous log has merged *)
 
-  let curr = 0
-  let last_merg = 1
-  let len = 2
+  let current_log = 0
+  let last_merged_log = 1
+  let partition = 2  (* partition last serialized to disk is in (part_fn partition) *)
+  let len = 3
 
   let get_field (arr:int_bigarray) field = arr.{field}
 
@@ -123,7 +124,7 @@ end
 
 (** The writer is responsible for taking updates and recording in log,
    and periodically rotating logs and firing the merge process. *)
-module Writer = struct
+module Writer_1 = struct
   open KV
 
   module F = Control_fields
@@ -143,21 +144,14 @@ module Writer = struct
   (** check_merge: whether we need to check the old merge has
      completed before launching a new one; the int is the pid *)
 
-  let create ~ctl_fn ~max_log_len ~phash_fn = 
+  let create ~ctl_fn ~max_log_len ~pmap_fn = 
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1024 in
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
-    let pmap = String_string_map.create ~fn:phash_fn in
+    let pmap = String_string_map.create ~fn:pmap_fn in
     { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap }
-
-  
-  let merge_and_exit 
-      ~generation 
-      ~mark_merged 
-      ~ops 
-      ~pmap = ()[@@warning "-27"]
 
   let switch_logs t = 
     (* need to switch logs; first check for completion of a previous
@@ -171,7 +165,7 @@ module Writer = struct
         (* NOTE child merge process guaranteed to be finished at this point *)
         assert(status = WEXITED 0);
         (* Check also that last_merge is as we expect *)
-        assert(Control.get_field t.ctl Control_fields.last_merg = gen);
+        assert(Control.get_field t.ctl F.last_merged_log = gen);
         t.check_merge <- None;
         (* Check if part_1234 exists, and if so, reload partition *)
         begin
@@ -188,23 +182,25 @@ module Writer = struct
     begin 
       Unix.fork () |> function 
       | 0 -> (* child *) 
-        merge_and_exit 
-          ~generation:t.gen 
-          ~mark_merged:(fun gen -> Control.set_field t.ctl F.last_merg gen)
-          ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq)
+        Merge_process.merge_and_exit 
+          ~merge_nonce:t.gen
+          ~post_merge_hook:(fun gen -> Control.set_field t.ctl F.last_merged_log gen)
+          ~partition_nonce:t.gen
+          ~partition_change_hook:(fun gen -> Control.set_field t.ctl F.partition gen)
           ~pmap:t.pmap
+          ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq)
       | pid -> (* parent *)
         t.check_merge <- Some{pid;gen=t.gen};          
-        () (* NOTE will continue after this begin..end block *)
+        () (* NOTE parent will continue after this begin..end block *)
     end;
     let new_gen = t.gen +1 in
     t.prev_map <- t.curr_map;
     t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
-    t.pmap <- t.pmap; (* FIXME need to read partition from disk and update *)
+    t.pmap <- t.pmap; (* NOTE partition change from a merge is dealt with above *)
     (* update gen last *)
     t.gen <- new_gen;
-    Control.(set_field t.ctl F.curr t.gen); 
+    Control.(set_field t.ctl F.current_log t.gen); 
     ()
 
   let rec insert t k v = 
@@ -237,4 +233,50 @@ module Writer = struct
 
 end
 
-module Test() = struct end
+module type WRITER = sig
+  type t 
+  val create : ctl_fn:string -> max_log_len:int -> pmap_fn:string -> t
+  val insert : t -> string -> string -> unit
+  val delete : t -> string -> unit
+  val close : t -> unit
+end
+
+module Writer_2 : WRITER = Writer_1
+
+module Writer = Writer_2
+
+module Test() = struct 
+
+  let lim = 1_000_000
+
+  let _ = 
+    Printf.printf "%s: test starts\n%!" __MODULE__;
+    let t = Writer.create ~ctl_fn:"ctl" ~max_log_len:32_000_000 ~pmap_fn:"pmap" in
+    begin
+      0 |> iter_k (fun ~k:kont i -> 
+          match i < lim with
+          | false -> ()
+          | true -> 
+            Writer.insert t (string_of_int i) (string_of_int i);
+            kont (i+1))
+    end;
+    Writer.close t;
+    Printf.printf "%s: test ends\n%!" __MODULE__;
+   
+(*
+
+$ kv-hash $ make run_test 
+time OCAMLRUNPARAM=b dune exec kv-hash/test/test6.exe
+(Config (blk_sz 4096) (ints_per_block 512) (max_sorted 245) (max_unsorted 10)
+ (bucket_size_ints 512) (bucket_size_bytes 4096))
+Kv_hash__Frontend: test starts
+Resizing 128
+Kv_hash__Frontend: test ends
+
+real    0m2.891s
+user    0m2.715s
+sys     0m0.156s
+
+*)
+ 
+end

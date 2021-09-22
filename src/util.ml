@@ -19,8 +19,8 @@ let dest_Some = function
 
 (* trace execution *)
 let trace (s:unit->string) = 
-  print_endline (s())
-  (* ignore(s); () *)
+  (* print_endline (s()) *)
+  ignore(s); ()
 [@@warning "-27"]
 
 let warn (s:unit->string) = 

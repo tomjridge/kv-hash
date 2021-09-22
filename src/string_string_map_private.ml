@@ -102,7 +102,7 @@ module With_phash(Phash:PHASH) = struct
   (* FIXME we don't have to sort... it is enough to partition using
      the top-level partition, which should be much quicker *)
   let batch t ops =
-    warn (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
+    trace (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     ops |> List.filter_map (function
         | (k,`Insert v) -> Some(hash k,v)
         | (k,`Delete) -> delete t k; None) |> fun inserts -> 
@@ -113,7 +113,7 @@ module With_phash(Phash:PHASH) = struct
        need to be sure order of deletes and inserts *)
     Printf.printf "Sort took %f\n%!" (t2 -. t1);
     inserts |> List.iter (fun (h,v) -> insert_hashed t h v);
-    warn (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+    trace (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
 
 end
 
