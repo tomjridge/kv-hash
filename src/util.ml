@@ -159,7 +159,7 @@ let merge (type k v) ~ks1 ~vs1 ~len1 ~ks2 ~vs2 ~len2 ~set =
   Merge.merge
 
 
-
+module Mmap = Tjr_mmap.Mmap
 
 (** Write to mmap using a bin_writer; allocate len space initially; if
    not enough space, increase the buffer size and try again. *)

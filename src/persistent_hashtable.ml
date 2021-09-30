@@ -24,18 +24,17 @@ module Make_1(Config:CONFIG) = struct
 
   let _ = assert(Bucket_.bucket_size_bytes <= blk_sz)
 
-  let _ = 
-    let open Sexplib.Std in
-    Sexplib.Sexp.to_string_hum 
-      [%message "Config"
-        ~blk_sz:(blk_sz : int)
-        ~ints_per_block:(ints_per_block : int)
-        ~max_sorted:(max_sorted : int)
-        ~max_unsorted:(max_unsorted : int)
-        ~bucket_size_ints:(Bucket_.bucket_size_ints : int)
-        ~bucket_size_bytes:(Bucket_.bucket_size_bytes : int)
-      ]
-    |> print_endline
+  let _ = trace (fun () ->  
+      let open Sexplib.Std in
+      Sexplib.Sexp.to_string_hum 
+        [%message "Config"
+            ~blk_sz:(blk_sz : int)
+            ~ints_per_block:(ints_per_block : int)
+            ~max_sorted:(max_sorted : int)
+            ~max_unsorted:(max_unsorted : int)
+            ~bucket_size_ints:(Bucket_.bucket_size_ints : int)
+            ~bucket_size_bytes:(Bucket_.bucket_size_bytes : int)
+        ])      
 
   type k = int
   type r = int
