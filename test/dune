@@ -28,6 +28,11 @@
  (modules Test6)
  (libraries kv_hash threads))
 
+(executable
+ (name "test7") ; random rw to file
+ (modules test7)
+ (libraries extunix bigstringaf))
+
 (alias
  (name "executables")
- (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe))
+ (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe))
