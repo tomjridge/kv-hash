@@ -1,3 +1,15 @@
+; Test executables:
+;
+; test1: phashtable test 1
+; test2: phashtable test 2
+; test3: string->string map
+; test4: batch test
+; IGNORE test5: fork with mmap test
+; test6: frontend test
+; IGNORE test7: unbuffered writes performance
+; IGNORE test8: bigarray coerce
+
+
 (executable
  (name "test")
  (modules Test)

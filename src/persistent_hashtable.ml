@@ -11,6 +11,7 @@ module type CONFIG = sig
   val blk_sz : int (* in bytes *)
 end
 
+type int_ba_t = (int,int8_unsigned_elt,c_layout)Bigarray.Array1.t
 
 module Make_1(Config:CONFIG) = struct
 
@@ -52,7 +53,6 @@ module Make_1(Config:CONFIG) = struct
   type t = {
     fn                : string; (* filename *)
     fd                : Unix.file_descr;
-    data              : (int,int_elt) Mmap.t; (* all the data in the file *)
     alloc_counter     : int ref;
     alloc             : unit -> int;
     mutable partition : Prt.t; (* NOTE mutable *)
@@ -63,9 +63,10 @@ module Make_1(Config:CONFIG) = struct
 
   (* create with an initial partition *)
   let create_p ~fn ~partition = 
-    Unix.(openfile fn [O_CREAT;O_RDWR; O_TRUNC] 0o640) |> fun fd -> 
-    Unix.truncate fn (const_4GB);
-    let data = Mmap.of_fd fd Bigarray.int in
+    (* Bigstring_unix requires fd to be non-blocking for pwrite *)
+    Core.Unix.(openfile ~mode:[O_CREAT;O_RDWR; O_TRUNC;O_NONBLOCK] fn) |> fun fd -> 
+    Unix.ftruncate fd (const_4GB);
+    (* let data = Mmap.of_fd fd Bigarray.int in *)
     (* keep block 0 for header etc *)
     let max_r = partition |> Prt.to_list |> List.map snd |> List.fold_left max 1 in
     let alloc_counter = ref (1+max_r) in
@@ -74,7 +75,7 @@ module Make_1(Config:CONFIG) = struct
       incr alloc_counter;
       r
     in
-    { fn; fd; data; alloc_counter; alloc; partition }
+    { fn; fd; alloc_counter; alloc; partition }
 
   (** n is the initial number of partitions of 0...max_int *)
   let create ~fn ~n =
@@ -88,29 +89,61 @@ module Make_1(Config:CONFIG) = struct
     create_p ~fn ~partition
 
   let close t = 
-    Mmap.close t.data; (* closes the underlying fd *)
-    (* Unix.close t.fd; *)
+    Unix.close t.fd;
     (* FIXME sync partition for reopen *)
     ()
 
-  let open_ ~fn:_ ~n:_ = failwith "FIXME partition.ml: open_"
+  let open_ ~fn:_ ~n:_ = failwith "FIXME persistent_hashtable.ml: open_"
 
-  let mk_bucket ~data i = 
-    let off = Config.blk_sz * i in
+  let write_data t ~off ~(data:int_ba_t) = 
+    let arr_c = Util.coerce_bigarray1 Ctypes.camlint Ctypes.char Bigarray.Char data in
+    let len = Array1.dim arr_c in
+    assert(len = blk_sz);
+    Bigstring_unix.pwrite_assume_fd_is_nonblocking 
+      t.fd  
+      ~offset:off 
+      ~pos:0 
+      ~len
+      arr_c |> fun n_written -> 
+    assert(n_written = len);
+    ()    
+
+  let read_data t ~off = 
+    let arr_c = Core.Bigstring.create blk_sz in
+    Bigstring_unix.pread_assume_fd_is_nonblocking 
+      t.fd  
+      ~offset:off 
+      ~pos:0 ~len:blk_sz arr_c |> fun n_read -> 
+    assert(n_read = blk_sz);
+    let arr_i = Util.coerce_bigarray1 Ctypes.char Ctypes.camlint Bigarray.Int arr_c in
+    arr_i
+
+  let create_bucket blk_i = 
     let len = ints_per_block in
-    { off; len; bucket_data=Mmap.sub data ~off ~len }
+    let data = Bigarray.(Array1.create Int C_layout len) in    
+    { blk_i; len; bucket_data=data }
+
+  let read_bucket t ~blk_i = 
+    let off = Config.blk_sz * blk_i in
+    let bucket_data = read_data t ~off in
+    { blk_i; len=ints_per_block; bucket_data }        
 
   let alloc_bucket t = 
     t.alloc () |> fun i -> 
-    mk_bucket ~data:t.data i
+    create_bucket i
 
   let add_to_bucket ~t ~bucket k v = 
     Bucket_.add_to_bucket ~alloc_bucket:(fun () -> alloc_bucket t) ~bucket k v
 
-  let find_bucket ~partition ~data k = 
-    Prt.find partition k |> fun (k,r) -> 
-    (* r is the partition offset within the store *)
-    k,mk_bucket ~data r
+  (* we have the potential for confusion if we read a bucket twice
+     into different arrays; this should only happen for concurrent
+     threads, when we assume one of the threads is a reader, so will
+     not mutate the bucket *)
+  let find_bucket t k = 
+    Prt.find t.partition k |> fun (k,blk_i) -> 
+    (* blk_i is the blk index within the store *)
+    let bucket = read_bucket t ~blk_i in
+    k,bucket
 
   
   (* public interface: insert, find (FIXME delete) *)
@@ -118,24 +151,24 @@ module Make_1(Config:CONFIG) = struct
   let insert t k v = 
     trace(fun () -> Printf.sprintf "insert: inserting %d %d\n%!" k v);
     (* find bucket *)
-    let k1,bucket = find_bucket ~partition:t.partition ~data:t.data k in
+    let k1,bucket = find_bucket t k in
     add_to_bucket ~t ~bucket k v |> function
     | `Ok -> ()
     | `Split(b1,k2,b2) -> 
       trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
-      Prt.split t.partition ~k1 ~r1:(b1.off / blk_sz) ~k2 ~r2:(b2.off / blk_sz); (* FIXME ugly division by blk_sz *)
+      Prt.split t.partition ~k1 ~r1:(b1.blk_i) ~k2 ~r2:(b2.blk_i);
       ()  
     
   let find_opt t k = 
-    let _,bucket = find_bucket ~partition:t.partition ~data:t.data k in
+    let _,bucket = find_bucket t k in
     Bucket_.find ~bucket k
 
   let delete _t _k = failwith "FIXME partition.ml: delete"
 
   let export t = 
-    let { partition; data; _ } = t in
-    Prt.to_list partition |> fun krs -> 
-    krs |> List.map (fun (k,_) -> find_bucket ~partition ~data k |> function (_,b) -> Bucket_.export b) |> fun buckets -> 
+    Prt.to_list t.partition |> fun krs -> 
+    krs |> List.map (fun (k,_) -> 
+        find_bucket t k |> function (_,b) -> Bucket_.export b) |> fun buckets -> 
     {partition=krs;buckets}
 
   let _ : t -> export_t = export

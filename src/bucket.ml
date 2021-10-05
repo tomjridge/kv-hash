@@ -4,8 +4,8 @@ open Mmap
 (* A bucket is stored at (off,len) within the larger data store;
    FIXME could just return bucket_data? do we need off and len? *)
 type bucket = {
-  off  : int;
-  len  : int;
+  blk_i : int; (* index of backing block *)
+  len   : int; (* length in number of ints *)
   bucket_data : int_bigarray
 }
 

@@ -195,3 +195,13 @@ let part_fn gen = "part_"^(string_of_int gen)
 
 
 
+(* t1 and t2 are ctypes kinds; t2_kind is a normal bigarray kind *)
+let coerce_bigarray1 t1 t2 t2_kind arr = 
+  Ctypes.bigarray_start Ctypes.array1 arr |> fun (pi:'t1 Ctypes.ptr) -> 
+  Ctypes.(coerce (ptr t1) (ptr t2) pi) |> fun (pc:'t2 Ctypes.ptr) -> 
+  Ctypes.bigarray_of_ptr (* this function forces C layout *) 
+    Ctypes.array1 
+    ((Bigarray.Array1.dim arr * Ctypes.(sizeof t1)) / Ctypes.(sizeof t2))
+    t2_kind
+    pc |> fun arr -> 
+  arr
