@@ -33,6 +33,11 @@
  (modules test7)
  (libraries extunix bigstringaf))
 
+(executable
+ (name "test8") ; bigarray kind casting
+ (modules test8)
+ (libraries extunix bigstringaf ctypes))
+
 (alias
  (name "executables")
- (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe))
+ (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe))
