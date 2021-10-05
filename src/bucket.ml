@@ -1,30 +1,5 @@
 open Util
-open Mmap
-
-(* A bucket is stored at (off,len) within the larger data store;
-   FIXME could just return bucket_data? do we need off and len? *)
-type bucket = {
-  blk_i : int; (* index of backing block *)
-  len   : int; (* length in number of ints *)
-  bucket_data : int_bigarray
-}
-
-include struct
-  (* for debugging *)
-  open Sexplib.Std
-  type exported_bucket = {
-    sorted: (int*int) list;
-    unsorted: (int*int) list
-  }[@@deriving sexp]
-end
-
-module Interpolate_ = Interpolate(struct type k = int type v = int end)
-
-module type BUCKET_CONFIG = sig
-  val max_sorted: int  
-  val max_unsorted: int
-end
-
+open Bucket_intf
 
 module Bucket(C:BUCKET_CONFIG) = struct
 
@@ -36,17 +11,26 @@ module Bucket(C:BUCKET_CONFIG) = struct
   (* NOTE sorted should always have unique keys; unsorted may not have
      unique keys *)
 
-  (* let bucket_size = Config.ints_per_block *)
+  (* 
+Layout: 
 
-  (* the sorted array starts at position 0, with the length of the
-     elts, and then the sorted elts, and then 0 bytes, then the
-     unsorted length, unsorted elts, and 0 bytes *)
+| len_sorted | k0 | v0 | ... | len_unsorted | k'0 | v'0 | ... |
+
+k,v are sorted; k',v' are unsorted
+
+  *)
 
   open C 
 
-  let bucket_size_ints = 1 + 2*max_sorted + 1 + 2*max_unsorted
+  let used_ints = 
+    1 (* len_sorted *)
+    + 2*max_sorted (* sorted kvs *)
+    + 1 (* len_unsorted *)
+    + 2*max_unsorted (* unsorted kvs *)
 
-  let bucket_size_bytes = bucket_size_ints * Bigarray.kind_size_in_bytes Bigarray.int
+  (* let bucket_size_bytes = bucket_size_ints * Bigarray.kind_size_in_bytes Bigarray.int *)
+      
+  let _ = assert(used_ints <= C.len)
 
   let _ = assert(max_sorted >= max_unsorted)
 
@@ -58,40 +42,34 @@ module Bucket(C:BUCKET_CONFIG) = struct
     let unsorted_start = len_unsorted +1
   end
 
-  module With_bucket(B:sig
-      val bucket : bucket
-    end) = struct
-    open B
+  type bucket = {
+    arr:int_bigarray;
+    sorted:int_bigarray; (* subarray *)
+    unsorted:int_bigarray; (* subarray *)
+  }
 
-    (* abbrev; we used to refer to the bucket as a partition; but
-       partition can mean either "partitioning" or "single
-       partition" *)
-    let p = bucket
+  let create ?(arr=Bigarray.(Array1.create Int C_layout len)) ()  = {
+    arr;
+    sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
+    unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
+  }  
 
-    (* shorter abbreviation *)
-    let arr = bucket.bucket_data
+  let data bucket = bucket.arr
 
+  module With_bucket(S:sig val bucket : bucket end) = struct
+    open S
 
-    (* in kv pairs *)
-    let len_sorted () = arr.{ Ptr.len_sorted }
+    let len_sorted () = bucket.arr.{ Ptr.len_sorted }
 
-    let set_len_sorted n = arr.{ Ptr.len_sorted } <- n
+    let set_len_sorted n = bucket.arr.{ Ptr.len_sorted } <- n
+      
+    let len_unsorted () = bucket.arr.{ Ptr.len_unsorted }
 
-    (* FIXME could avoid sorted and unsorted subarrays, and just index in U and S *)
-    let sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted)
+    let set_len_unsorted n = bucket.arr.{ Ptr.len_unsorted } <- n
 
-    let len_unsorted () = arr.{ Ptr.len_unsorted }
+    let sorted = bucket.sorted
 
-    let set_len_unsorted n = arr.{ Ptr.len_unsorted } <- n
-
-    let unsorted = 
-      assert( 
-        let len = Bigarray.Array1.dim arr in
-        Ptr.unsorted_start + (2*max_unsorted) <= len
-        || begin
-          Printf.printf "%d %d %d\n%!" Ptr.unsorted_start (2*max_unsorted) len;
-          false end);
-      Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted)
+    let unsorted = bucket.unsorted
 
     (* unsorted *)
     module U = struct
@@ -106,7 +84,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
     end
 
     let find_sorted k = 
-      Interpolate_.find 
+      Interpolate_ii.find 
         ~len:(len_sorted())
         ~ks:S.ks
         ~vs:S.vs
@@ -162,7 +140,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
       (* move sorted so that the elts reside at the end of the
          partition *)
       (* FIXME assert dst is within bucket_data *)
-      let dst = Bigarray.Array1.sub arr (Ptr.sorted_start+2*max_unsorted) (2*len1) in
+      let dst = Bigarray.Array1.sub bucket.arr (Ptr.sorted_start+2*max_unsorted) (2*len1) in
       (* FIXME perhaps use a tmp buffer? what about concurrent read?
          yes, need to use a tmp buffer; this also helps with knowing
          the length of the result *)
@@ -194,13 +172,14 @@ module Bucket(C:BUCKET_CONFIG) = struct
         to the split. NOTE alloc returns a new *clean* bucket
         (lengths are 0 etc) *)
     let split_with_addition ~alloc_bucket kv = 
+      trace (fun () -> "split_with_addition");
       let p1,p2 = alloc_bucket(),alloc_bucket() in
       (* check clean partitions *)
-      assert(p1.bucket_data.{ Ptr.len_sorted } = 0
-             && p1.bucket_data.{ Ptr.len_unsorted } = 0);
-      assert(p2.bucket_data.{ Ptr.len_sorted } = 0
-             && p2.bucket_data.{ Ptr.len_unsorted } = 0);
-      assert(p1.len = p.len && p2.len = p.len);
+      assert(p1.arr.{ Ptr.len_sorted } = 0
+             && p1.arr.{ Ptr.len_unsorted } = 0);
+      assert(p2.arr.{ Ptr.len_sorted } = 0
+             && p2.arr.{ Ptr.len_unsorted } = 0);
+      (* assert(p1.len = p.len && p2.len = p.len); *)
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
       assert(not (len1 + len2 <= max_sorted));
@@ -222,15 +201,15 @@ module Bucket(C:BUCKET_CONFIG) = struct
         match !count < cut_point with
         | true -> 
           (* fill p1 *)
-          p1.bucket_data.{ Ptr.sorted_start + 2*i } <- k;
-          p1.bucket_data.{ Ptr.sorted_start + 2*i +1} <- v;
+          p1.arr.{ Ptr.sorted_start + 2*i } <- k;
+          p1.arr.{ Ptr.sorted_start + 2*i +1} <- v;
           incr count;
           ()
         | false -> 
           (* fill p2 *)
           let i = i - cut_point in
-          p2.bucket_data.{ Ptr.sorted_start + 2*i } <- k;
-          p2.bucket_data.{ Ptr.sorted_start + 2*i +1} <- v;
+          p2.arr.{ Ptr.sorted_start + 2*i } <- k;
+          p2.arr.{ Ptr.sorted_start + 2*i +1} <- v;
           (* no need to incr count *)
           ()
       in
@@ -239,7 +218,7 @@ module Bucket(C:BUCKET_CONFIG) = struct
         ~ks2 ~vs2 ~len2
         ~set
         () |> fun n -> 
-      p1.bucket_data.{ Ptr.len_sorted } <- cut_point;
+      p1.arr.{ Ptr.len_sorted } <- cut_point;
       assert(len1 + len2 <= 2*len1); (* FIXME logic *)
       assert(
         n-cut_point>0 || begin
@@ -251,21 +230,25 @@ module Bucket(C:BUCKET_CONFIG) = struct
          original sorted length; why is this the case? need l1+l2 <
          2*l1, which should be the case if l2 small compared to l1
       *)
-      p2.bucket_data.{ Ptr.len_sorted } <- n - cut_point;
+      p2.arr.{ Ptr.len_sorted } <- n - cut_point;
       (* get lowest key in p2 *)
-      let k2 = p2.bucket_data.{ Ptr.sorted_start } in
+      let k2 = p2.arr.{ Ptr.sorted_start } in
       (p1,k2,p2)
 
     let add ~alloc_bucket k v = 
+      trace(fun () -> "bucket.add");
       (* try to add in unsorted *)
       let len2 = len_unsorted () in
       match len2 < max_unsorted with
       | true -> (
+          trace(fun () -> __LOC__);
           unsorted.{ 2*len2 } <- k;
           unsorted.{ 2*len2 +1 } <- v;
+          trace(fun () -> __LOC__);
           set_len_unsorted (len2+1);
           `Ok)
       | false -> 
+        trace(fun () -> __LOC__);
         (* check if we can merge existing unsorted elts *)
         let len1 = len_sorted () in
         match len1+len2 <= max_sorted with
@@ -282,8 +265,10 @@ module Bucket(C:BUCKET_CONFIG) = struct
           `Split(p1,k,p2)
 
     let export () = 
+      trace(fun () -> "bucket.export");
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
+      trace(fun () -> Printf.sprintf "len1 %d; len2 %d\n" len1 len2);
       (* copy sorted into an array *)
       let kvs1 = Array.init len1 (fun i -> S.ks i, S.vs i) in
       (* copy unsorted into an array, and sort *)
@@ -293,19 +278,20 @@ module Bucket(C:BUCKET_CONFIG) = struct
     (* FIXME what about delete? *)
   end (* With_bucket *)
 
-  let add_to_bucket ~bucket = 
+  let insert ~alloc_bucket bucket k v = 
     let open With_bucket(struct let bucket=bucket end) in
-    add
+    add ~alloc_bucket k v
 
-  let _ : bucket:bucket ->
+  let _ : 
 alloc_bucket:(unit -> bucket) ->
-int -> int -> [ `Ok | `Split of bucket * int * bucket ] = add_to_bucket
+bucket ->
+int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
 
-  let find ~bucket = 
+  let find bucket k = 
     let open With_bucket(struct let bucket=bucket end) in
-    find
+    find k
 
-  let _ : bucket:bucket -> int -> int option = find
+  let _ : bucket -> int -> int option = find
 
   let export bucket = 
     let open With_bucket(struct let bucket=bucket end) in

@@ -19,8 +19,8 @@ let dest_Some = function
 
 (* trace execution *)
 let trace (s:unit->string) = 
-  (* print_endline (s()) *)
-  ignore(s); ()
+  print_endline (s())
+  (* ignore(s); () *)
 [@@warning "-27"]
 
 let warn (s:unit->string) = 
@@ -99,6 +99,8 @@ module Interpolate(S:sig
 
   let _ : len:k -> ks:(k -> k) -> vs:(k -> v) -> k -> v option = find
 end
+
+module Interpolate_ii = Interpolate(struct type k = int type v = int end)
 
 
 (* Merge two sorted sequences; ks2 take precedence; perhaps it would

@@ -1,5 +1,6 @@
 open Bigarray
 open Util
+open Bucket_intf
 open Bucket
 open Persistent_hashtable_intf
 
@@ -7,23 +8,29 @@ module Partition_ = Partition.Partition_ii
 
 
 module type CONFIG = sig
-  include BUCKET_CONFIG
+  val max_sorted:int
+  val max_unsorted:int
   val blk_sz : int (* in bytes *)
 end
 
-type int_ba_t = (int,int8_unsigned_elt,c_layout)Bigarray.Array1.t
+type int_ba_t = (int,int_elt,c_layout)Bigarray.Array1.t
 
 module Make_1(Config:CONFIG) = struct
 
   open Config
 
-  module Bucket_ = Bucket(Config)
+  module Bucket_config = struct
+    include Config
+    let len = blk_sz / Bigarray.(kind_size_in_bytes Int)
+  end
+
+  module Bucket_ = Bucket(Bucket_config)
 
   let blk_sz = Config.blk_sz
 
   let ints_per_block = blk_sz / Bigarray.kind_size_in_bytes Bigarray.int
 
-  let _ = assert(Bucket_.bucket_size_bytes <= blk_sz)
+  (* let _ = assert(Bucket_.bucket_size_bytes <= blk_sz) *)
 
   let _ = trace (fun () ->  
       let open Sexplib.Std in
@@ -33,8 +40,8 @@ module Make_1(Config:CONFIG) = struct
             ~ints_per_block:(ints_per_block : int)
             ~max_sorted:(max_sorted : int)
             ~max_unsorted:(max_unsorted : int)
-            ~bucket_size_ints:(Bucket_.bucket_size_ints : int)
-            ~bucket_size_bytes:(Bucket_.bucket_size_bytes : int)
+            (* ~bucket_size_ints:(Bucket_.bucket_size_ints : int) *)
+            (* ~bucket_size_bytes:(Bucket_.bucket_size_bytes : int) *)
         ])      
 
   type k = int
@@ -145,18 +152,22 @@ module Make_1(Config:CONFIG) = struct
     let bucket = read_bucket t ~blk_i in
     k,bucket
 
+  let sync_bucket t (b:bucket) = write_data t ~off:b.blk_i ~data:b.bucket_data
   
   (* public interface: insert, find (FIXME delete) *)
-    
+
+  (* FIXME we are syncing on each modification; may be worth caching? *)
   let insert t k v = 
     trace(fun () -> Printf.sprintf "insert: inserting %d %d\n%!" k v);
     (* find bucket *)
     let k1,bucket = find_bucket t k in
     add_to_bucket ~t ~bucket k v |> function
-    | `Ok -> ()
+    | `Ok -> sync_bucket t bucket
     | `Split(b1,k2,b2) -> 
       trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
       Prt.split t.partition ~k1 ~r1:(b1.blk_i) ~k2 ~r2:(b2.blk_i);
+      sync_bucket t b1;
+      sync_bucket t b2;
       ()  
     
   let find_opt t k = 

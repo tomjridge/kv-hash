@@ -11,8 +11,8 @@
 
 
 (executable
- (name "test")
- (modules Test)
+ (name "test1")
+ (modules Test1)
  (libraries kv_hash))
 
 (executable
@@ -52,4 +52,4 @@
 
 (alias
  (name "executables")
- (deps test.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe))
+ (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe))

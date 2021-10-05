@@ -1,8 +1,10 @@
 (** Persistent hashtable interface (for [int->int] map) *)
 
+open Bucket_intf
+
 type export_t = {
   partition: (int*int) list;
-  buckets: Bucket.exported_bucket list
+  buckets: exported_bucket list
 }
 
 (** In the following, k and r are actually int *)
