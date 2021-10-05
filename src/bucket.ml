@@ -1,7 +1,8 @@
+open Bigarray
 open Util
 open Bucket_intf
 
-module Bucket(C:BUCKET_CONFIG) = struct
+module Make_1(C:BUCKET_CONFIG) = struct
 
 
   (* NOTE for crash-resilience a partition should be block aligned and
@@ -20,7 +21,7 @@ k,v are sorted; k',v' are unsorted
 
   *)
 
-  open C 
+  include C 
 
   let used_ints = 
     1 (* len_sorted *)
@@ -48,13 +49,17 @@ k,v are sorted; k',v' are unsorted
     unsorted:int_bigarray; (* subarray *)
   }
 
-  let create ?(arr=Bigarray.(Array1.create Int C_layout len)) ()  = {
-    arr;
-    sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
-    unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
-  }  
+  type t = bucket
 
-  let data bucket = bucket.arr
+  let create ?(arr=Bigarray.(Array1.create Int C_layout len)) ()  = 
+    assert(Array1.dim arr = len);
+    {
+      arr;
+      sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
+      unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
+    }  
+
+  let get_data bucket = bucket.arr
 
   module With_bucket(S:sig val bucket : bucket end) = struct
     open S
@@ -171,9 +176,9 @@ k,v are sorted; k',v' are unsorted
     (** The kv parameter is an extra key-value that we need to add
         to the split. NOTE alloc returns a new *clean* bucket
         (lengths are 0 etc) *)
-    let split_with_addition ~alloc_bucket kv = 
+    let split_with_addition kv = 
       trace (fun () -> "split_with_addition");
-      let p1,p2 = alloc_bucket(),alloc_bucket() in
+      let p1,p2 = create(),create() in
       (* check clean partitions *)
       assert(p1.arr.{ Ptr.len_sorted } = 0
              && p1.arr.{ Ptr.len_unsorted } = 0);
@@ -235,7 +240,7 @@ k,v are sorted; k',v' are unsorted
       let k2 = p2.arr.{ Ptr.sorted_start } in
       (p1,k2,p2)
 
-    let add ~alloc_bucket k v = 
+    let add k v = 
       trace(fun () -> "bucket.add");
       (* try to add in unsorted *)
       let len2 = len_unsorted () in
@@ -261,7 +266,7 @@ k,v are sorted; k',v' are unsorted
           `Ok
         | false -> 
           (* unsorted is full, and not enough space to merge, so we need to split *)
-          split_with_addition ~alloc_bucket (k,v) |> fun (p1,k,p2) -> 
+          split_with_addition (k,v) |> fun (p1,k,p2) -> 
           `Split(p1,k,p2)
 
     let export () = 
@@ -278,12 +283,11 @@ k,v are sorted; k',v' are unsorted
     (* FIXME what about delete? *)
   end (* With_bucket *)
 
-  let insert ~alloc_bucket bucket k v = 
+  let insert bucket k v = 
     let open With_bucket(struct let bucket=bucket end) in
-    add ~alloc_bucket k v
+    add k v
 
   let _ : 
-alloc_bucket:(unit -> bucket) ->
 bucket ->
 int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
 
@@ -296,5 +300,17 @@ int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
   let export bucket = 
     let open With_bucket(struct let bucket=bucket end) in
     export()    
+      
+  let show t = 
+    let open Sexplib.Std in
+    export t |> fun e -> 
+    Sexplib.Sexp.to_string_hum 
+      [%message "Bucket"
+          ~sorted:(e.sorted : (int*int) list)
+          ~unsorted:(e.unsorted: (int*int) list)
+      ]
+    |> print_endline
 
-end (* Bucket *)
+end (* Make_1 *)
+
+module Make_2(C:BUCKET_CONFIG) : BUCKET = Make_1(C)

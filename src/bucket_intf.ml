@@ -33,17 +33,18 @@ module type BUCKET = sig
 
   include BUCKET_CONFIG
 
-  type bucket
+  type t
+  type bucket = t
 
   val create : ?arr:int_bigarray -> unit -> bucket
 
-  val data : bucket -> int_bigarray (* guaranteed to be of size len *)
+  val get_data : bucket -> int_bigarray (* guaranteed to be of size len *)
 
   type k := int
   type v := int
 
   val find   : bucket -> k -> v option
-  val insert : alloc_bucket:(unit -> bucket) -> bucket -> k -> v -> [ `Ok | `Split of bucket * k * bucket ]
+  val insert : bucket -> k -> v -> [ `Ok | `Split of bucket * k * bucket ]
   val show   : bucket -> unit
   val export : bucket -> exported_bucket
 

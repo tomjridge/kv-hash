@@ -183,6 +183,9 @@ type char_bigarray = (char,Bigarray.int8_unsigned_elt,Bigarray.c_layout)Bigarray
 
 type int_bigarray = (int,Bigarray.int_elt,Bigarray.c_layout)Bigarray.Array1.t
 
+type int_ba_t = (int,Bigarray.int_elt,Bigarray.c_layout)Bigarray.Array1.t
+
+
 (** The kind of the mmap'ed array; see Bigarray.kind *)
 type ('a,'b) kind = ('a,'b) Bigarray.kind
 
@@ -207,3 +210,27 @@ let coerce_bigarray1 t1 t2 t2_kind arr =
     t2_kind
     pc |> fun arr -> 
   arr
+
+
+let write_int_ba ~fd ~off (data:int_ba_t) = 
+  let arr_c = coerce_bigarray1 Ctypes.camlint Ctypes.char Bigarray.Char data in
+  let len = Bigarray.Array1.dim arr_c in
+  (* assert(len = blk_sz); *)
+  Bigstring_unix.pwrite_assume_fd_is_nonblocking 
+    fd  
+    ~offset:off 
+    ~pos:0 
+    ~len
+    arr_c |> fun n_written -> 
+  assert(n_written = len);
+  ()    
+
+let read_int_ba ~blk_sz ~fd ~off = 
+  let arr_c = Core.Bigstring.create blk_sz in
+  Bigstring_unix.pread_assume_fd_is_nonblocking 
+    fd  
+    ~offset:off 
+    ~pos:0 ~len:blk_sz arr_c |> fun n_read -> 
+  assert(n_read = blk_sz);
+  let arr_i = coerce_bigarray1 Ctypes.char Ctypes.camlint Bigarray.Int arr_c in
+  arr_i
