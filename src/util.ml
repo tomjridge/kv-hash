@@ -18,9 +18,11 @@ let dest_Some = function
   | Some x -> x
 
 (* trace execution *)
-let trace (s:unit->string) = 
-  print_endline (s())
-  (* ignore(s); () *)
+let trace = 
+  try 
+    ignore(Sys.getenv "DEBUG_KVHASH");
+    fun s -> print_endline (s())
+  with Not_found -> fun s -> ignore(s); ()
 [@@warning "-27"]
 
 let warn (s:unit->string) = 

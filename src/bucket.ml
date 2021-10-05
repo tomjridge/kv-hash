@@ -51,7 +51,7 @@ k,v are sorted; k',v' are unsorted
 
   type t = bucket
 
-  let create ?(arr=Bigarray.(Array1.create Int C_layout len)) ()  = 
+  let create ?(arr=Bigarray.(Array1.init Int C_layout len (fun _ -> 0))) ()  = 
     assert(Array1.dim arr = len);
     {
       arr;
