@@ -140,6 +140,7 @@ module Writer_1 = struct
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
     mutable pmap        : String_string_map.t;
+    debug: (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
   }
   (** check_merge: whether we need to check the old merge has
      completed before launching a new one; the int is the pid *)
@@ -151,7 +152,7 @@ module Writer_1 = struct
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
     let pmap = String_string_map.create ~fn:pmap_fn in
-    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap }
+    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap;debug=Hashtbl.create 1024 }
 
   let switch_logs t = 
     (* need to switch logs; first check for completion of a previous
@@ -213,7 +214,22 @@ module Writer_1 = struct
     Control.(set_field t.ctl F.current_log t.gen); 
     ()
 
+  let find_opt t k = 
+    begin
+      let map = function `Insert v -> Some v | `Delete -> None in
+      Hashtbl.find_opt t.curr_map k |> function
+      | Some v -> map v
+      | None -> (
+          Hashtbl.find_opt t.prev_map k |> function
+          | Some v -> map v
+          | None -> 
+            String_string_map.find_opt t.pmap k)    
+    end |> fun r -> 
+    assert(r=Hashtbl.find_opt t.debug k);
+    r
+
   let rec insert t k v = 
+    Hashtbl.replace t.debug k v;
     (* write to active log if enough space and update curr_map;
        otherwise switch to new log and merge old; then insert in new
        log *)
@@ -227,6 +243,7 @@ module Writer_1 = struct
       insert t k v
 
   let rec delete t k = 
+    ignore(failwith "unsupported");
     match Log_file_w.can_write t.curr_log with
     | true -> 
       Log_file_w.write t.curr_log (`Delete(k));      
@@ -245,10 +262,11 @@ end
 
 module type WRITER = sig
   type t 
-  val create : ctl_fn:string -> max_log_len:int -> pmap_fn:string -> t
-  val insert : t -> string -> string -> unit
-  val delete : t -> string -> unit
-  val close : t -> unit
+  val create   : ctl_fn:string -> max_log_len:int -> pmap_fn:string -> t
+  val find_opt : t -> string -> string option
+  val insert   : t -> string -> string -> unit
+  val delete   : t -> string -> unit
+  val close    : t -> unit
 end
 
 module Writer_2 : WRITER = Writer_1
