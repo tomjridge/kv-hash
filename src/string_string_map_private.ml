@@ -82,9 +82,11 @@ module With_phash(Phash:PHASH) = struct
       end |> fun r -> 
       trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
       r
-
-  let insert_hashed t hash v = 
+      
+  (* hash is the hash of k *)
+  let insert_hashed t k hash v = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
+    Cache.add t.cache k (`Present v);
     let k' = hash in
     Values.append_value t.values v |> fun off -> 
     Phash.insert t.p_int_map k' off;
@@ -93,9 +95,8 @@ module With_phash(Phash:PHASH) = struct
 
   let insert t k v =
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    Cache.add t.cache k (`Present v);
     let k' = hash k in
-    insert_hashed t k' v;
+    insert_hashed t k k' v;
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     ()
 
@@ -108,15 +109,15 @@ module With_phash(Phash:PHASH) = struct
   let batch t ops =
     trace (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     ops |> List.filter_map (function
-        | (k,`Insert v) -> Some(hash k,v)
+        | (k,`Insert v) -> Some(k,hash k,v)
         | (_k,`Delete) -> failwith "Delete not supported") |> fun inserts -> 
     let t1 = Unix.time () in
-    inserts |> List.sort (fun (h1,_) (h2,_) -> Int.compare h1 h2) |> fun inserts -> 
+    inserts |> List.sort (fun (_,h1,_) (_,h2,_) -> Int.compare h1 h2) |> fun inserts -> 
     let t2 = Unix.time () in
     (* FIXME also want to remove new inserts from deleted, and FIXME
        need to be sure order of deletes and inserts *)
     Printf.printf "Sort took %f\n%!" (t2 -. t1);
-    inserts |> List.iter (fun (h,v) -> insert_hashed t h v);
+    inserts |> List.iter (fun (k,h,v) -> insert_hashed t k h v);
     (* this is a good place to trim the cache... assuming we always go via batch *)
     Cache.maybe_trim t.cache ~young_sz:const_1M ~old_sz:const_1M;
     trace (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
