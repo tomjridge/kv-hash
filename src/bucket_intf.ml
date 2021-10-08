@@ -36,7 +36,9 @@ module type BUCKET = sig
   type t
   type bucket = t
 
-  val create : ?arr:int_bigarray -> unit -> bucket
+  val create_empty : ?arr:int_bigarray -> unit -> bucket
+
+  val create_nonempty : int_bigarray -> bucket
 
   val get_data : bucket -> int_bigarray (* guaranteed to be of size len *)
 

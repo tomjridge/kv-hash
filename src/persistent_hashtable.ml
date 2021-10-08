@@ -104,14 +104,14 @@ module Make_1(Config:CONFIG) = struct
     write_int_ba ~fd:t.fd ~off:(b.blk_i * blk_sz) (Rawb.get_data b.rawb)
 
   let create_bucket t ~blk_i = 
-    let rawb = Rawb.create () in
+    let rawb = Rawb.create_empty () in
     let b = { blk_i; rawb } in
     sync_bucket t b;
     b
 
   let read_bucket t ~blk_i = 
     let arr = read_int_ba ~fd:t.fd ~blk_sz ~off:(blk_sz * blk_i) in    
-    { blk_i; rawb=Rawb.create ~arr () }
+    { blk_i; rawb=Rawb.create_nonempty arr }
 
   (* we have the potential for confusion if we read a bucket twice
      into different arrays; this should only happen for concurrent

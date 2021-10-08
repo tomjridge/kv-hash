@@ -51,13 +51,25 @@ k,v are sorted; k',v' are unsorted
 
   type t = bucket
 
-  let create ?(arr=Bigarray.(Array1.init Int C_layout len (fun _ -> 0))) ()  = 
+  let create_empty ?(arr=Bigarray.(Array1.create Int C_layout len )) ()  = 
+    arr.{Ptr.len_sorted} <- 0;
+    arr.{Ptr.len_unsorted} <- 0;
     assert(Array1.dim arr = len);
     {
       arr;
       sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
       unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
     }  
+
+  (** Assumes the arr is correctly formed *)
+  let create_nonempty arr = 
+    assert(Array1.dim arr = len);
+    {
+      arr;
+      sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
+      unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
+    }  
+    
 
   let get_data bucket = bucket.arr
 
@@ -178,7 +190,7 @@ k,v are sorted; k',v' are unsorted
         (lengths are 0 etc) *)
     let split_with_addition kv = 
       trace (fun () -> "split_with_addition");
-      let p1,p2 = create(),create() in
+      let p1,p2 = create_empty(),create_empty() in
       (* check clean partitions *)
       assert(p1.arr.{ Ptr.len_sorted } = 0
              && p1.arr.{ Ptr.len_unsorted } = 0);
