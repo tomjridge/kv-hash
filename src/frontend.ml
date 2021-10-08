@@ -257,7 +257,7 @@ module Writer = Writer_2
 
 module Test() = struct 
 
-  let lim = 100_000_000
+  let lim = 10_000_000
 
   let _ = 
     Printf.printf "%s: test starts\n%!" __MODULE__;

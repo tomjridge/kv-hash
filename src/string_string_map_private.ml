@@ -36,7 +36,8 @@ type 'int_map t = {
   values: Values.t;
   mutable p_int_map: 'int_map; (* mutable because RO instances need to
                                 sync this from disk after a merge *)
-  deleted: (string,unit)Hashtbl.t (* FIXME hack to support delete quickly *)
+  (* deleted: (string,unit)Hashtbl.t; (\* FIXME hack to support delete quickly *\) *)
+  cache: (string,string) Cache_2gen.t
 }
 
 
@@ -48,7 +49,11 @@ module type PHASH = sig
     (* val delete   : t -> int -> unit FIXME currently hacked using lookaside hashtable *)
   end
 
+module Cache = Cache_2gen
   
+(* cache size *)
+let const_1M = 1_000_000
+
 module With_phash(Phash:PHASH) = struct
 
   let hash (s:string) = 
@@ -59,18 +64,24 @@ module With_phash(Phash:PHASH) = struct
 
   let find_opt t k = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    let k' = hash k in
-    begin
-      (Hashtbl.find_opt t.deleted k) |> function 
-      | Some () ->  None
-      | None -> 
+    (* first try to find in cache *)
+    match Cache.find_opt' t.cache k with
+    | Some (`Present v) -> (Some v)
+    | Some `Absent -> None
+    | None -> 
+      let k' = hash k in
+      begin
         Phash.find_opt t.p_int_map k' |> function
-        | None -> None
+        | None -> 
+          Cache.add t.cache k `Absent;
+          None
         | Some v' -> 
-          Some(Values.read_value t.values ~off:v')
-    end |> fun r -> 
-    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
-    r
+          Values.read_value t.values ~off:v' |> fun v -> 
+          Cache.add t.cache k (`Present v);
+          Some v          
+      end |> fun r -> 
+      trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
+      r
 
   let insert_hashed t hash v = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
@@ -82,18 +93,11 @@ module With_phash(Phash:PHASH) = struct
 
   let insert t k v =
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    (Hashtbl.remove t.deleted k);
+    Cache.add t.cache k (`Present v);
     let k' = hash k in
     insert_hashed t k' v;
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     ()
-
-  let delete t k =
-    Hashtbl.replace t.deleted k ()
-(*
-    let k' = hash k in
-    Phash.delete t.int_map k'
-*)
 
   (* for batch, we need the hash and insert_hashed functions so we can
      pre-sort ops by hash of key, which improves subsequent
@@ -105,7 +109,7 @@ module With_phash(Phash:PHASH) = struct
     trace (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     ops |> List.filter_map (function
         | (k,`Insert v) -> Some(hash k,v)
-        | (k,`Delete) -> delete t k; None) |> fun inserts -> 
+        | (_k,`Delete) -> failwith "Delete not supported") |> fun inserts -> 
     let t1 = Unix.time () in
     inserts |> List.sort (fun (h1,_) (h2,_) -> Int.compare h1 h2) |> fun inserts -> 
     let t2 = Unix.time () in
@@ -113,6 +117,8 @@ module With_phash(Phash:PHASH) = struct
        need to be sure order of deletes and inserts *)
     Printf.printf "Sort took %f\n%!" (t2 -. t1);
     inserts |> List.iter (fun (h,v) -> insert_hashed t h v);
+    (* this is a good place to trim the cache... assuming we always go via batch *)
+    Cache.maybe_trim t.cache ~young_sz:const_1M ~old_sz:const_1M;
     trace (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
 
 end
@@ -146,12 +152,10 @@ module Make_1 = struct
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     Phash.create ~fn ~n:10_000 |> fun p_int_map -> 
     let values = Values.create ~fn:(fn ^".values") in
-    let deleted = Hashtbl.create 1000 in
+    (* let deleted = Hashtbl.create 1000 in *)
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
-    { values; p_int_map; deleted }
+    { values; p_int_map; cache=Cache_2gen.create ~young_sz:1_000_000 ~old_sz:1_000_000 }
 
-  (* let open_ ~fn = failwith "FIXME" *)
-    
   include With_phash_  
       
   let close t = 
