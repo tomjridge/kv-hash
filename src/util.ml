@@ -236,3 +236,13 @@ let read_int_ba ~blk_sz ~fd ~off =
   assert(n_read = blk_sz);
   let arr_i = coerce_bigarray1 Ctypes.char Ctypes.camlint Bigarray.Int arr_c in
   arr_i
+
+let sorted_int_ba arr = 
+  let b = ref true in
+  for i = 0 to Bigarray.Array1.dim arr -1 -1 do
+    b := !b && (arr.{i} < arr.{i+1})
+  done;
+  !b
+  
+
+module Map_i = Map.Make(struct type t = int let compare: int -> int -> int = Int.compare end)

@@ -50,4 +50,10 @@ module type BUCKET = sig
   val show   : bucket -> unit
   val export : bucket -> exported_bucket
 
+  (* This adds debugging for each operation; expensive! *)
+  module With_debug() : sig
+    val find   : bucket -> k -> v option
+    val insert : bucket -> k -> v -> [ `Ok | `Split of bucket * k * bucket ]
+  end
+
 end

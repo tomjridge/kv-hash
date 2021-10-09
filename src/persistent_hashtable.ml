@@ -24,7 +24,15 @@ module Make_1(Config:CONFIG) = struct
   end
 
   (* Raw bucket *)
-  module Rawb = Bucket.Make_2(Bucket_config)
+  module Rawb' = Bucket.Make(Bucket_config)
+  (* Add debugging at runtime; FIXME expensive? prefer simple module expression? *)
+  let rawb = Sys.getenv_opt "DEBUG_BUCKET" |> function
+    | None -> (module Rawb' : BUCKET with type t = Rawb'.t)
+    | Some _ -> (module (struct
+                  include Rawb'
+                  include Rawb'.With_debug()
+                end))
+  module Rawb = (val rawb)
 
   type bucket = { blk_i:int; rawb: Rawb.t }
 

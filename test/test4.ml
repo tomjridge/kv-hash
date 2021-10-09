@@ -7,10 +7,10 @@ let time () = Unix.time ()
 
 module Kv = Kv_hash.String_string_map
 
-let initial_inserts = 20_000_000
+let initial_inserts = 1_000_000
 
 let batch_size = 50_000
-let batch_n = 20
+let batch_n = 10
 
 let go () = 
   Printf.printf "Test starts\n%!";

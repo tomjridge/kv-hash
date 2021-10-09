@@ -225,7 +225,15 @@ module Writer_1 = struct
           | None -> 
             String_string_map.find_opt t.pmap k)    
     end |> fun r -> 
-    assert(r=Hashtbl.find_opt t.debug k);
+    assert(
+      let expected = Hashtbl.find_opt t.debug k in
+      r = expected || begin
+        Printf.printf "Debug: error detected; key is %S; value should have been %S but was %S\n%!" 
+          k 
+          (if expected=None then "None" else Option.get expected)
+          (if r=None then "None" else Option.get r)
+        ;
+        false end);
     r
 
   let rec insert t k v = 

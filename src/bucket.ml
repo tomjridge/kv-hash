@@ -2,6 +2,7 @@ open Bigarray
 open Util
 open Bucket_intf
 
+
 module Make_1(C:BUCKET_CONFIG) = struct
 
 
@@ -323,6 +324,80 @@ int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
       ]
     |> print_endline
 
+
+  module With_debug() = struct
+
+    let _ = Printf.printf "%s: debugging bucket operations\n%!" __MODULE__
+
+    (* Specification just a map for the time being *)
+
+    let to_map bucket = 
+      let len_s = (2*bucket.arr.{Ptr.len_sorted}) in
+      let sorted = Bigarray.Array1.sub bucket.sorted 0 len_s in
+      (* check that the keys (only) are sorted *)
+      assert(
+        begin
+          0 |> iter_k (fun ~k i -> 
+            match i >= Bigarray.Array1.dim sorted -2 with
+              | true -> true
+              | false -> 
+                sorted.{i} < sorted.{i+2} && k (i+2))
+        end || begin          
+          let open Sexplib.Std in
+          Sexplib.Sexp.to_string_hum 
+            [%message "Bucket.sorted is not sorted"
+                ~sorted:(Array.init len_s (fun i -> sorted.{i}) : int array)
+            ]
+          |> print_endline;
+          false end          
+      );
+      let unsorted = Bigarray.Array1.sub bucket.unsorted 0 (2*bucket.arr.{Ptr.len_unsorted}) in
+      (Map_i.empty,0) |> iter_k (fun ~k (m,i) -> 
+          match i < Bigarray.Array1.dim sorted with
+          | true -> k (Map_i.add sorted.{i} sorted.{i+1} m, i+2)
+          | false -> m) |> fun m -> 
+      (m,0) |> iter_k (fun ~k (m,i) -> 
+          match i < Bigarray.Array1.dim unsorted with
+          | true -> k (Map_i.add unsorted.{i} unsorted.{i+1} m, i+2)
+          | false -> m) |> fun m -> 
+      m
+      
+    let insert bucket k v = 
+      let m1 = to_map bucket in
+      insert bucket k v |> fun r -> 
+      match r with 
+      | `Ok -> 
+        let m2 = to_map bucket in
+        assert(Map_i.add k v m1 |> Map_i.equal Int.equal m2);
+        r
+      | `Split(b1,_k,b2) -> 
+        let m21 = to_map b1 in
+        let m22 = to_map b2 in
+        begin (* check separated *)
+          Map_i.max_binding_opt m21 |> function
+          | None -> ()
+          | Some max -> 
+            Map_i.min_binding_opt m22 |> function
+            | None -> ()
+            | Some min -> assert(max < min); ()
+        end;
+        begin (* check bindings agree *)
+          assert( (Map_i.add k v m1 |> Map_i.bindings)
+                  = (Map_i.bindings m21 @ Map_i.bindings m22));
+        end;
+        r
+
+    let find bucket k = 
+      let m1 = to_map bucket in
+      find bucket k |> fun vopt -> 
+      assert(vopt = Map_i.find_opt k m1);
+      vopt
+
+  end (* With_debug *)
 end (* Make_1 *)
 
+
+
 module Make_2(C:BUCKET_CONFIG) : BUCKET = Make_1(C)
+
+module Make = Make_2
