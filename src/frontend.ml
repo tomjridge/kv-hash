@@ -1,5 +1,20 @@
 (** The frontend: record updates in two logs (rotating between them). *)
 
+(**
+
+Sequence of events:
+
+- log_n becomes full
+- finalise log_n:
+  - check previous merge (if any) has completed
+  - reload partition (if changed) for working with log_(n+1) 
+  - start new merge for log_n
+    - merge entries
+    - if partition changed, write to disk, and notify main thread    
+- start new log_(n+1)
+
+*)
+
 open Util
 
 let testing=true (* FIXME change when finished testing *)
@@ -12,6 +27,16 @@ let const_1GiB = 1_073_741_824[@@warning "-32"]
 
 let const_1k = 1024[@@warning "-32"]
 
+module Debug = struct
+
+  (* Show all interactions with this key *)
+  let key = "z1\177\200\227\175auk3k\207\195\176\194\146\200\155@\204\138P\128\186\153\196Tc\209\016\206\139"
+
+end
+
+module String_string_map_ = String_string_map_private.Make_2
+
+module Merge_process_ = Merge_process.Make(String_string_map_)
 
 module KV = struct
   (* open Bin_prot.Std *)
@@ -85,7 +110,7 @@ last_merge - which log generation was last merged; -1 indicates "None";
 usually we don't switch from current log till previous log has merged *)
 
   let current_log = 0
-  let last_merged_log = 1
+  (* let last_merged_log = 1 *)
   let partition = 2  (* partition last serialized to disk is in (part_fn partition) *)
   let len = 3
 
@@ -129,83 +154,81 @@ module Writer_1 = struct
 
   module F = Control_fields
 
-  type check_merge_t = { pid:int; gen:int }
+  type check_merge_t = { pid:int; gen:int; }
 
   type t = {
     max_log_len:int;
     ctl: Control.t;
     mutable prev_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
-    mutable gen         : int;
+    mutable gen         : int; (* log generation *)
     mutable curr_log    : Log_file_w.t;
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
-    mutable pmap        : String_string_map.t;
-    debug: (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
+    mutable pmap        : String_string_map_.t;
+    debug               : (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
+    debug_log           : Stdlib.out_channel;
   }
   (** check_merge: whether we need to check the old merge has
      completed before launching a new one; the int is the pid *)
 
   let create ~ctl_fn ~max_log_len ~pmap_fn = 
     let ctl = Control.create ~fn:ctl_fn in
-    let prev_map = Hashtbl.create 1024 in
+    let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
-    let pmap = String_string_map.create ~fn:pmap_fn in
-    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap;debug=Hashtbl.create 1024 }
+    let pmap = String_string_map_.create ~fn:pmap_fn in
+    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap;debug=Hashtbl.create 1024; debug_log=(Stdlib.open_out_bin "debug_log") }
 
   let switch_logs t = 
-    (* need to switch logs; first check for completion of a previous
-       merge *)
-    begin 
+    begin    (* check for completion of a previous merge, and reload a new
+                partition if it exists *)
       match t.check_merge with
-      | None -> ()
+      | None -> () (* should happen only when merging the very first log *)
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
-        let t1 = Unix.time () in
-        warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
-        Unix.waitpid [] pid |> fun (_pid,status) -> 
-        let t2 = Unix.time () in
-        warn (fun () -> Printf.sprintf "Wait completed in %f\n%!" (t2 -. t1));
-        (* NOTE child merge process guaranteed to be finished at this point *)
-        assert(status = WEXITED 0);
-        (* Check also that last_merge is as we expect *)
-        assert(Control.get_field t.ctl F.last_merged_log = gen);
+        begin    (* wait for merge *)
+          let t1 = Unix.time () in
+          warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
+          Unix.waitpid [] pid |> fun (_pid,status) -> 
+          let t2 = Unix.time () in
+          warn (fun () -> Printf.sprintf "Wait completed in %f\n%!" (t2 -. t1));
+          (* NOTE child merge process guaranteed to be finished at this point *)
+          assert(status = WEXITED 0);
+          ()
+        end; 
         t.check_merge <- None;
-        (* Check if part_1234 exists, and if so, reload partition *)
-        begin
+        begin    (* Check if part_1234 exists, and if so, reload partition *)
           Sys.file_exists (part_fn gen) |> function
           | false -> ()
           | true -> 
             warn(fun () -> Printf.sprintf "Reloading partition from file part_%d\n" gen);
-            String_string_map.get_phash t.pmap |> fun phash -> 
+            String_string_map_.get_phash t.pmap |> fun phash -> 
             String_string_map_private.Make_1.Phash.reload_partition 
               phash
               ~fn:(part_fn gen)
         end;
     end;
     begin 
+      let gen = t.gen in
       Unix.fork () |> function 
-      | 0 -> (* child *) 
-        let t1 = Unix.time () in
-        warn (fun () -> Printf.sprintf "Merge started\n%!");
-        Stdlib.at_exit (fun () -> 
-            let t2 = Unix.time () in
-            warn (fun () -> Printf.sprintf "Merge process terminated in %f\n%!" (t2 -. t1));
-            ());            
-        Merge_process.merge_and_exit 
-          ~merge_nonce:t.gen
-          ~post_merge_hook:(fun gen -> Control.set_field t.ctl F.last_merged_log gen)
-          ~partition_nonce:t.gen
-          ~partition_change_hook:(fun gen -> Control.set_field t.ctl F.partition gen)
+      | 0 -> 
+        (* child *) 
+        Merge_process_.merge_and_exit 
+          ~gen
           ~pmap:t.pmap
-          ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq)
-      | pid -> (* parent *)
-        t.check_merge <- Some{pid;gen=t.gen};          
+          ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq) (* NOTE curr_map! *)
+      | pid -> 
+        (* parent *)
+        t.check_merge <- Some{pid;gen};
         () (* NOTE parent will continue after this begin..end block *)
     end;
     let new_gen = t.gen +1 in
-    t.prev_map <- t.curr_map;
+    (* after a batch operation, the debug state is altered in the
+       merge thread, but not in the main thread FIXME could put these
+       ops in the pending merge *)
+    String_string_map_.batch_update_debug t.pmap (Hashtbl.to_seq t.prev_map |> List.of_seq);
+    t.prev_map <- t.curr_map; (* this is the map that is being merged *)
     t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
     t.pmap <- t.pmap; (* NOTE partition change from a merge is dealt with above *)
@@ -215,6 +238,7 @@ module Writer_1 = struct
     ()
 
   let find_opt t k = 
+    (* (match k=Debug.key with | true -> debug (fun () -> Printf.sprintf "find_opt with key %S\n%!" k) | false -> ()); *)
     begin
       let map = function `Insert v -> Some v | `Delete -> None in
       Hashtbl.find_opt t.curr_map k |> function
@@ -223,20 +247,24 @@ module Writer_1 = struct
           Hashtbl.find_opt t.prev_map k |> function
           | Some v -> map v
           | None -> 
-            String_string_map.find_opt t.pmap k)    
+            String_string_map_.find_opt t.pmap k)    
     end |> fun r -> 
     assert(
       let expected = Hashtbl.find_opt t.debug k in
       r = expected || begin
-        Printf.printf "Debug: error detected; key is %S; value should have been %S but was %S\n%!" 
+        Printf.printf "Debug: error detected; key is %S; value should have been %S but was %S in %s\n%!" 
           k 
           (if expected=None then "None" else Option.get expected)
           (if r=None then "None" else Option.get r)
+          __MODULE__
         ;
         false end);
+    Sexp_trace.append t.debug_log (k,`Find(r));    
     r
 
   let rec insert t k v = 
+    Sexp_trace.append t.debug_log (k,`Insert(v));    
+    (* (match k=Debug.key with | true -> debug (fun () -> Printf.sprintf "insert with key=%S value=%S\n%!" k v) | false -> ()); *)
     Hashtbl.replace t.debug k v;
     (* write to active log if enough space and update curr_map;
        otherwise switch to new log and merge old; then insert in new

@@ -15,48 +15,51 @@ The merge process is forked from the frontend. It has access to the
 
 *)
 
+open Util
 
 (** Operations are insert: (k,`Insert v), or delete: (k,`Delete) *)
 type op = string * [ `Insert of string | `Delete ]
 
 module Partition_ = Partition.Partition_ii
 
-include struct
-
-  (* [@@@warning "-26-27"] *)
+module Make(String_string_map:String_string_map_private.S) = struct
 
   (* perform the merge; call post_merge_hook; if partition has
      changed, write to file "partition_1234" (with 1234 replaced by
      the nonce) and call partition_change_hook *)
   (* NOTE ops do not need to be sorted - that happens in pmap.batch *)
-  let merge_and_exit 
-      ~merge_nonce 
-      ~post_merge_hook
-      ~partition_nonce
-      ~partition_change_hook (* if there are changes to the partition *)
+  let merge_and_exit
+      ~(gen:int)
       ~(pmap:String_string_map.t) 
       ~(ops:op list)
     = 
-    let partition_changed = ref false in
+    let t1 = Unix.time () in
+    warn (fun () -> Printf.sprintf "Merge started\n%!");
     let partition = 
       (* FIXME rename Pmap_ss *)
       String_string_map.get_phash pmap |> 
-      String_string_map_private.Make_1.Phash.get_partition      
+      String_string_map_private.Make_1.Phash.get_partition
     in
-    Partition_.set_split_hook partition (fun () -> partition_changed := true);
+    let len1 = Partition_.length partition in
     String_string_map.batch pmap ops;
-    post_merge_hook merge_nonce;
+    let len2 = Partition_.length partition in
     begin
-      match !partition_changed with
-      | false -> ()
+      match len1 = len2 with
       | true -> 
-        let fn = Util.part_fn partition_nonce in
+        (* no need to write out partition *)
+        warn(fun () -> "Merge_process: partition was unchanged");
+        ()
+      | false -> 
+        (* partition changed; use gen as the new partition filename *)
+        warn(fun () -> "Merge_process: partition changed");
+        let fn = Util.part_fn gen in
         let oc = open_out fn in
         Partition_.write partition oc;
         close_out_noerr oc;
-        partition_change_hook partition_nonce;
         ()
     end;    
+    let t2 = Unix.time () in
+    warn (fun () -> Printf.sprintf "Merge process terminated in %f\n%!" (t2 -. t1));
     Stdlib.exit 0
 
 end

@@ -185,6 +185,9 @@ module Make_1(Config:CONFIG) = struct
 
   let get_partition t = t.partition
 
+  let show_bucket t k = 
+    find_bucket t k |> fun (_,b) -> Rawb.show b.rawb
+    
 
 end (* Make *)
 

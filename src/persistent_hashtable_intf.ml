@@ -33,5 +33,7 @@ module type S = sig
   val export : t -> export_t
 
   val show : t -> unit
+
+  val show_bucket : t -> k -> unit
   
 end

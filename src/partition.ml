@@ -82,10 +82,13 @@ module Make_1(S:S) : PURE_PARTITION with type k=S.k and type r=S.r
     Map.set p ~key:k2 ~data:r2 |> fun p -> 
     p
 
+  let length t = Map.length t
+
   (* FIXME prefer bin_prot for persistence *)
   let write t oc = output_value oc (to_list t)
 
   let read ic = input_value ic |> of_list
+
 end
 
 
@@ -120,6 +123,8 @@ module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r
     ()
 
   let set_split_hook t f = t.split_hook <- f
+
+  let length t = Pure.length t.partition
 
   (* FIXME prefer bin_prot for persistence *)
   let write t oc = Pure.write t.partition oc
