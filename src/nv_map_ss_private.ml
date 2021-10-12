@@ -29,9 +29,6 @@ open Util
 
 module Cache = Cache_2gen
   
-(* cache size *)
-let const_1M = 1_000_000
-
 let hash (s:string) = 
   let h = XXHash.XXH64.hash s |> Int64.to_int in
   let h = abs h in
@@ -44,10 +41,12 @@ let hash (s:string) =
    values file). *)
 type 'int_map t = {
   values: Values_file.t;
-  mutable nv_int_map: 'int_map; (* mutable because RO instances need to
-                                sync this from disk after a merge *)
-  (* deleted: (string,unit)Hashtbl.t; (\* FIXME hack to support delete quickly *\) *)
+  mutable nv_int_map: 'int_map; 
+  (* NOTE mutable because RO instances need to sync this from disk
+     after a merge *)
+
   cache: (string,string) Cache_2gen.t;
+
   debug: (string,string) Hashtbl.t; (* All entries, for debugging only *)
 }
 
@@ -231,7 +230,7 @@ module Make_2 = struct
     let values = Values_file.create ~fn:(fn ^".values") in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     { values; nv_int_map; 
-      cache=Cache_2gen.create ~young_sz:1_000_000 ~old_sz:1_000_000; 
+      cache=Cache_2gen.create ~young_sz:const_1M ~old_sz:const_1M; 
       debug=Hashtbl.create 1 }
 
   include Made_1.With_debug(Made_1.Basic) 
@@ -246,15 +245,20 @@ module Make_2 = struct
   let get_nv_map_ii t = t.nv_int_map
       
   type nonrec t = Nv_map_ii_.t t
+
+  let get_values_file t = t.values
 end
 
 (** Add an extra function we need; expose Nv_map_ii_ submodule *)
 module type S2 = sig
+
   module Nv_map_ii_ : module type of Make_2.Nv_map_ii_
-  include Nv_map_ss_intf.S
+
+  include Nv_map_ss_intf.S with type nv_map_ii := Nv_map_ii_.t
+
   val batch_update_debug : t -> Nv_map_ss_intf.op list -> unit
 end 
-with type nv_map_ii := Make_2.Nv_map_ii_.t
+
 
 module Make_3 : S2 = Make_2
 

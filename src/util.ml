@@ -288,5 +288,7 @@ module Consts = struct
 
   let const_1k = 1024
 
+  let const_1M = 1_000_000
+
 end
 include Consts

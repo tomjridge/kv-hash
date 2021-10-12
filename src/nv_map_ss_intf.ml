@@ -16,6 +16,8 @@ module type S = sig
   type nv_map_ii
   val get_nv_map_ii : t -> nv_map_ii
 
+  val get_values_file : t -> Values_file.t
+
 end
 
 
