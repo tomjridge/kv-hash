@@ -11,6 +11,8 @@ type export_t = {
    signature with k=int and r=int *)
 module type S_kr = sig
 
+  module Rawb : BUCKET
+
   type t
   type k
   type r
@@ -41,6 +43,8 @@ module type S_kr = sig
   val show : t -> unit
 
   val show_bucket : t -> k -> unit
+
+  val get_bucket : t -> k -> Rawb.bucket
   
 end
 

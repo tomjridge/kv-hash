@@ -20,40 +20,44 @@ open Util
 (** Operations are insert: (k,`Insert v), or delete: (k,`Delete) *)
 type op = string * [ `Insert of string | `Delete ]
 
-module Partition_ = Partition.Partition_ii
+module Partition_ii = Partition.Partition_ii
 
 module Make(Nv_map_ss:Nv_map_ss_private.S2) = struct
 
-  (* perform the merge; if partition has changed, write to file
-     "partition_1234" (with 1234 replaced by the gen) *)
-  (* NOTE ops do not need to be sorted - that happens in pmap.batch *)
+  (** Perform the merge; if partition has changed, write to file
+     "partition_1234" (with 1234 replaced by the gen); NOTE ops do not
+     need to be sorted - that happens in [batch ops] in the parent *)
   let merge_and_exit
       ~(gen:int)
       ~(nv_map_ss:Nv_map_ss.t) 
       ~(ops:op list)
-    = 
+    =     
     let t1 = Unix.time () in
     warn (fun () -> Printf.sprintf "Merge started\n%!");
+    (* WARNING! To avoid shared fd state between parent and child, we
+       must reload the values_file; otherwise seeks in the parent
+       interfere with seeks in the child *)
+    Nv_map_ss.get_values_file nv_map_ss |> fun vf -> 
+    Values_file.reload vf;
     let partition = 
-      (* FIXME rename Nv_Map_ss *)
       Nv_map_ss.get_nv_map_ii nv_map_ss |> 
-      Nv_map_ss_private.Make_2.Nv_map_ii_.get_partition
+      Nv_map_ss.Nv_map_ii_.get_partition
     in
-    let len1 = Partition_.length partition in
+    let len1 = Partition_ii.length partition in
     Nv_map_ss.batch nv_map_ss ops;
-    let len2 = Partition_.length partition in
+    let len2 = Partition_ii.length partition in
     begin
       match len1 = len2 with
       | true -> 
-        (* no need to write out partition *)
+        (* No need to write out partition *)
         warn(fun () -> "Merge_process: partition was unchanged");
         ()
       | false -> 
-        (* partition changed; use gen as the new partition filename *)
+        (* Partition changed; use gen as the new partition filename *)
         warn(fun () -> "Merge_process: partition changed");
         let fn = Util.part_fn gen in
         let oc = open_out fn in
-        Partition_.write partition oc;
+        Partition_ii.write partition oc;
         close_out_noerr oc;
         ()
     end;    

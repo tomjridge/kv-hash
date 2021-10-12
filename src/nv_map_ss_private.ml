@@ -52,15 +52,7 @@ type 'int_map t = {
 
 
 (** What we need from the large [int->int] Nv_map_ii_intf.S map *)
-module type S1 = sig 
-  type t
-  type k := int
-  type v := int
-  val find_opt    : t -> k -> v option
-  val insert      : t -> k -> v -> unit
-  val show_bucket : t -> k -> unit
-end
-
+module type S1 = Nv_map_ii_intf.S
 
 module Make_1(Nv_map_ii_:S1) = struct
 
@@ -93,11 +85,10 @@ module Make_1(Nv_map_ii_:S1) = struct
       trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
       ()
 
-    (* for batch, we need the hash and insert_hashed functions so we can
-       pre-sort ops by hash of key, which improves subsequent
-       performance; for deletes, we just accumulate; we assume there are
-       no duplicate keys in ops *)
-    (* FIXME we don't have to sort... it is enough to partition using
+    (* For batch, we need the hash and insert_hashed functions so we
+       can pre-sort ops by hash of key, which improves subsequent
+       performance *)
+    (* NOTE FIXME? we don't have to sort... it is enough to partition using
        the top-level partition, which should be much quicker *)
     let batch t ops =
       trace (fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
@@ -169,7 +160,15 @@ module Make_1(Nv_map_ii_:S1) = struct
             (if expected=None then "None" else Option.get expected)
             (if r=None then "None" else Option.get r)
             __MODULE__;
-          Nv_map_ii_.show_bucket t.nv_int_map (hash k);
+          (* Nv_map_ii_.show_bucket t.nv_int_map (hash k); *)
+          let bucket = Nv_map_ii_.get_bucket t.nv_int_map (hash k) in
+          Nv_map_ii_.Rawb.show bucket;
+          begin match Nv_map_ii_.Rawb.find bucket (hash k) with
+            | None -> ()
+            | Some off -> 
+              let s : string = Values_file.read_value t.values ~off in
+              Printf.printf "Debug: value in values_file was: %S\n%!" s
+          end;                    
           true (* continue with incorrect value FIXME *) end);
       r
 
@@ -207,8 +206,7 @@ To create given filename fn:
 - create the int->int map on fn
 - create the values map on fn.values
 
-
- *)
+*)
 module Make_2 = struct
 
   module Config = struct
@@ -229,12 +227,15 @@ module Make_2 = struct
     Nv_map_ii_.create ~fn ~n:10_000 |> fun nv_int_map -> 
     let values = Values_file.create ~fn:(fn ^".values") in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
-    { values; nv_int_map; 
+    { values; 
+      nv_int_map; 
       cache=Cache_2gen.create ~young_sz:const_1M ~old_sz:const_1M; 
       debug=Hashtbl.create 1 }
 
-  include Made_1.With_debug(Made_1.Basic) 
+  let batch_update_debug _t _ops = () (* FIXME for debug version, comment this line *)
+  (* include Made_1.With_debug(Made_1.Basic)  *)
   (* FIXME add cache when sure this is working correctly *)
+  include Made_1.Basic
 
   let close t = 
     Values_file.close t.values;

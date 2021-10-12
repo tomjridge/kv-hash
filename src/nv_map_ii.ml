@@ -200,6 +200,8 @@ module Make_1(Config:CONFIG) = struct
 
   let show_bucket t k = 
     find_bucket t k |> fun (_,b) -> Rawb.show b.rawb
+
+  let get_bucket t k = find_bucket t k |> fun (_,b) -> b.rawb
     
 end (* Make *)
 

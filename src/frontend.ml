@@ -17,16 +17,6 @@ Sequence of events:
 
 open Util
 
-let testing=true (* FIXME change when finished testing *)
-
-
-module Debug = struct
-
-  (* Show all interactions with this key *)
-  let key = "z1\177\200\227\175auk3k\207\195\176\194\146\200\155@\204\138P\128\186\153\196Tc\209\016\206\139"
-
-end
-
 module Nv_map_ss_ = Nv_map_ss_private.Make_2
 
 module Merge_process_ = Merge_process.Make(Nv_map_ss_)
@@ -157,7 +147,7 @@ module Writer_1 = struct
     mutable curr_log    : Log_file_w.t;
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
-    mutable nv_map_ss        : Nv_map_ss_.t;
+    mutable nv_map_ss   : Nv_map_ss_.t;
     debug               : (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
     debug_log           : Stdlib.out_channel;
   }
@@ -171,15 +161,26 @@ module Writer_1 = struct
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
     let nv_map_ss = Nv_map_ss_.create ~fn:nv_map_ss_fn in
-    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;nv_map_ss;debug=Hashtbl.create 1024; debug_log=(Stdlib.open_out_bin "debug_log") }
+    { max_log_len;
+      ctl;
+      prev_map;
+      gen;
+      curr_log;
+      curr_map;
+      check_merge=None;
+      nv_map_ss;
+      debug=Hashtbl.create 1024; 
+      debug_log=(Stdlib.open_out_bin "debug_log") }
 
   let switch_logs t = 
-    begin    (* check for completion of a previous merge, and reload a new
-                partition if it exists *)
+    begin    
+      (* check for completion of a previous merge, and reload a new
+         partition if it exists *)
       match t.check_merge with
       | None -> () (* should happen only when merging the very first log *)
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
+
         begin    (* wait for merge *)
           let t1 = Unix.time () in
           warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
@@ -190,7 +191,9 @@ module Writer_1 = struct
           assert(status = WEXITED 0);
           ()
         end; 
+
         t.check_merge <- None;
+
         begin    (* Check if part_1234 exists, and if so, reload partition *)
           Sys.file_exists (part_fn gen) |> function
           | false -> ()
@@ -231,7 +234,6 @@ module Writer_1 = struct
     ()
 
   let find_opt t k = 
-    (* (match k=Debug.key with | true -> debug (fun () -> Printf.sprintf "find_opt with key %S\n%!" k) | false -> ()); *)
     begin
       let map = function `Insert v -> Some v | `Delete -> None in
       Hashtbl.find_opt t.curr_map k |> function
@@ -241,24 +243,9 @@ module Writer_1 = struct
           | Some v -> map v
           | None -> 
             Nv_map_ss_.find_opt t.nv_map_ss k)    
-    end |> fun r -> 
-    assert(
-      let expected = Hashtbl.find_opt t.debug k in
-      r = expected || begin
-        Printf.printf "Debug: error detected; key is %S; value should have been %S but was %S in %s\n%!" 
-          k 
-          (if expected=None then "None" else Option.get expected)
-          (if r=None then "None" else Option.get r)
-          __MODULE__
-        ;
-        false end);
-    Sexp_trace.append t.debug_log (k,`Find(r));    
-    r
+    end
 
   let rec insert t k v = 
-    Sexp_trace.append t.debug_log (k,`Insert(v));    
-    (* (match k=Debug.key with | true -> debug (fun () -> Printf.sprintf "insert with key=%S value=%S\n%!" k v) | false -> ()); *)
-    Hashtbl.replace t.debug k v;
     (* write to active log if enough space and update curr_map;
        otherwise switch to new log and merge old; then insert in new
        log *)
@@ -271,6 +258,9 @@ module Writer_1 = struct
       switch_logs t;
       insert t k v
 
+
+  let delete _t _k = failwith "unsupported"
+(* FIXME
   let rec delete t k = 
     ignore(failwith "unsupported");
     match Log_file_w.can_write t.curr_log with
@@ -281,11 +271,38 @@ module Writer_1 = struct
     | false -> 
       switch_logs t;
       delete t k
+*)
     
   let close t = 
     Mmap.close t.ctl.ctl_mmap;
     Log_file_w.close t.curr_log;
     ()    
+
+  (** Debugging versions *)
+  module With_debug() = struct
+    let _ = Printf.printf "%s: using With_debug version\n%!" __MODULE__
+
+    let find_opt t k = 
+      find_opt t k |> fun r -> 
+      assert(
+        let expected = Hashtbl.find_opt t.debug k in
+        r = expected || begin
+          Printf.printf "Debug: error detected; key is %S; value should have been %S but was %S in %s\n%!" 
+            k 
+            (if expected=None then "None" else Option.get expected)
+            (if r=None then "None" else Option.get r)
+            __MODULE__
+          ;
+          false end);
+      Sexp_trace.append t.debug_log (k,`Find(r));
+      r
+
+    let insert t k v =
+      insert t k v;
+      Sexp_trace.append t.debug_log (k,`Insert(v));    
+      Hashtbl.replace t.debug k v;
+      () 
+  end
 
 end
 
