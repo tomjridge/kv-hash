@@ -7,8 +7,9 @@ type export_t = {
   buckets: exported_bucket list
 }
 
-(** In the following, k and r are actually int *)
-module type S = sig
+(** "General" signature, with k and r free; we actually use this
+   signature with k=int and r=int *)
+module type S_kr = sig
 
   type t
   type k
@@ -30,17 +31,10 @@ module type S = sig
 
   (** Access to subcomponents *)
 
-  type partition
+  val get_partition: t -> Partition.Partition_ii.t
 
-  val get_partition: t -> partition
 
-(* we don't have this in pers_hashtable 
-  type values
-
-  val get_values : t -> values
-*)
-
-  (* debug *)
+  (** Debug *)
 
   val export : t -> export_t
 
@@ -49,3 +43,5 @@ module type S = sig
   val show_bucket : t -> k -> unit
   
 end
+
+module type S = S_kr with type k=int and type r=int

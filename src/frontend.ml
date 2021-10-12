@@ -20,13 +20,6 @@ open Util
 let testing=true (* FIXME change when finished testing *)
 
 
-(* FIXME only for testing *)
-(* let const_max_log_len = 4_000_000 *)
-
-let const_1GiB = 1_073_741_824[@@warning "-32"]
-
-let const_1k = 1024[@@warning "-32"]
-
 module Debug = struct
 
   (* Show all interactions with this key *)

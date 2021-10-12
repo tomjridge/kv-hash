@@ -278,3 +278,15 @@ module Sexp_trace = struct
     Sexplib.Sexp.input_sexp ic |> ops_of_sexp
 
 end
+
+
+module Consts = struct
+
+  let const_4GB = 4_294967296
+
+  let const_1GiB = 1_073_741_824
+
+  let const_1k = 1024
+
+end
+include Consts

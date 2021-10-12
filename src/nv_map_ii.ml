@@ -71,10 +71,8 @@ module Make_1(Config:CONFIG) = struct
     alloc_counter     : int ref;
     alloc             : unit -> int;
     mutable partition : Prt.t; (* NOTE mutable *)
-    (* add_to_bucket     : bucket -> int -> int -> [ `Ok | `Split of bucket * int * bucket ]; *)
   }
 
-  let const_4GB = 4_294967296
 
   (* create with an initial partition *)
   let create_p ~fn ~partition = 
@@ -110,6 +108,9 @@ module Make_1(Config:CONFIG) = struct
 
   let open_ ~fn:_ ~n:_ = failwith "FIXME persistent_hashtable.ml: open_"
 
+
+  (** {2 Bucket util} *)
+
   let sync_bucket t (b:bucket) : unit = 
     write_int_ba ~fd:t.fd ~off:(b.blk_i * blk_sz) (Rawb.get_data b.rawb)
 
@@ -132,8 +133,11 @@ module Make_1(Config:CONFIG) = struct
     (* blk_i is the blk index within the store *)
     let bucket = read_bucket t ~blk_i in
     k,bucket
+
+
+
   
-  (* public interface: insert, find (FIXME delete) *)
+  (** {2 Public interface: insert, find (FIXME delete)} *)
 
   (* FIXME we are syncing on each modification; may be worth caching? *)
   let insert t k v = 
@@ -157,6 +161,22 @@ module Make_1(Config:CONFIG) = struct
 
   let delete _t _k = failwith "FIXME partition.ml: delete"
 
+
+  (* FIXME this can just be with partition, no? since partition is mutable anyway *)
+  let reload_partition t ~fn =     
+    let ic = open_in_bin fn in
+    let partition = Prt.read ic in
+    let max_r = 
+      Partition_.to_list partition |> fun krs -> 
+      krs |> List.map snd |> List.fold_left max 0
+    in
+    t.alloc_counter := 1+max_r; (* FIXME or max_r? *)
+    t.partition <- partition
+
+
+
+  (** {2 Debugging} *)
+
   let export t = 
     Prt.to_list t.partition |> fun krs -> 
     krs |> List.map (fun (k,_) -> 
@@ -174,16 +194,7 @@ module Make_1(Config:CONFIG) = struct
         ~buckets:(e.buckets: exported_bucket list)
       ]
     |> print_endline
-    
-  let reload_partition t ~fn =     
-    let ic = open_in_bin fn in
-    let partition = Prt.read ic in
-    let max_r = 
-      Partition_.to_list partition |> fun krs -> 
-      krs |> List.map snd |> List.fold_left max 0
-    in
-    t.alloc_counter := 1+max_r; (* FIXME or max_r? *)
-    t.partition <- partition
+
 
   let get_partition t = t.partition
 
@@ -192,13 +203,7 @@ module Make_1(Config:CONFIG) = struct
     
 end (* Make *)
 
-module type S = 
-  Nv_map_ii_intf.S 
-  with type k=int 
-   and type r=int
-   and type partition := Partition_.t
-
-module Make_2(Config:CONFIG) : S = Make_1(Config)
+module Make_2(Config:CONFIG) : Nv_map_ii_intf.S = Make_1(Config)
 
 
 module Test() = struct
