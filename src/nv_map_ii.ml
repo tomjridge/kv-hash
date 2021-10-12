@@ -1,11 +1,9 @@
-(** FIXME this doesn't have a values file... it just combines
+(** NOTE this doesn't have a values file... it just combines
    partition and bucket *)
 
 
-(* open Bigarray *)
 open Util
 open Bucket_intf
-(* open Bucket *)
 open Nv_map_ii_intf
 
 module Partition_ = Partition.Partition_ii

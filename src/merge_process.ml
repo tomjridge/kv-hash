@@ -22,7 +22,7 @@ type op = string * [ `Insert of string | `Delete ]
 
 module Partition_ = Partition.Partition_ii
 
-module Make(String_string_map:String_string_map_private.S) = struct
+module Make(Nv_map_ss:Nv_map_ss_private.S) = struct
 
   (* perform the merge; call post_merge_hook; if partition has
      changed, write to file "partition_1234" (with 1234 replaced by
@@ -30,18 +30,18 @@ module Make(String_string_map:String_string_map_private.S) = struct
   (* NOTE ops do not need to be sorted - that happens in pmap.batch *)
   let merge_and_exit
       ~(gen:int)
-      ~(pmap:String_string_map.t) 
+      ~(pmap:Nv_map_ss.t) 
       ~(ops:op list)
     = 
     let t1 = Unix.time () in
     warn (fun () -> Printf.sprintf "Merge started\n%!");
     let partition = 
       (* FIXME rename Pmap_ss *)
-      String_string_map.get_phash pmap |> 
-      String_string_map_private.Make_1.Phash.get_partition
+      Nv_map_ss.get_phash pmap |> 
+      Nv_map_ss_private.Make_1.Phash.get_partition
     in
     let len1 = Partition_.length partition in
-    String_string_map.batch pmap ops;
+    Nv_map_ss.batch pmap ops;
     let len2 = Partition_.length partition in
     begin
       match len1 = len2 with

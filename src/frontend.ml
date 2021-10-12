@@ -34,9 +34,9 @@ module Debug = struct
 
 end
 
-module String_string_map_ = String_string_map_private.Make_2
+module Nv_map_ss_ = Nv_map_ss_private.Make_2
 
-module Merge_process_ = Merge_process.Make(String_string_map_)
+module Merge_process_ = Merge_process.Make(Nv_map_ss_)
 
 module KV = struct
   (* open Bin_prot.Std *)
@@ -164,7 +164,7 @@ module Writer_1 = struct
     mutable curr_log    : Log_file_w.t;
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
-    mutable pmap        : String_string_map_.t;
+    mutable pmap        : Nv_map_ss_.t;
     debug               : (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
     debug_log           : Stdlib.out_channel;
   }
@@ -177,7 +177,7 @@ module Writer_1 = struct
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
-    let pmap = String_string_map_.create ~fn:pmap_fn in
+    let pmap = Nv_map_ss_.create ~fn:pmap_fn in
     { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap;debug=Hashtbl.create 1024; debug_log=(Stdlib.open_out_bin "debug_log") }
 
   let switch_logs t = 
@@ -203,8 +203,8 @@ module Writer_1 = struct
           | false -> ()
           | true -> 
             warn(fun () -> Printf.sprintf "Reloading partition from file part_%d\n" gen);
-            String_string_map_.get_phash t.pmap |> fun phash -> 
-            String_string_map_private.Make_1.Phash.reload_partition 
+            Nv_map_ss_.get_phash t.pmap |> fun phash -> 
+            Nv_map_ss_private.Make_1.Phash.reload_partition 
               phash
               ~fn:(part_fn gen)
         end;
@@ -227,7 +227,7 @@ module Writer_1 = struct
     (* after a batch operation, the debug state is altered in the
        merge thread, but not in the main thread FIXME could put these
        ops in the pending merge *)
-    String_string_map_.batch_update_debug t.pmap (Hashtbl.to_seq t.prev_map |> List.of_seq);
+    Nv_map_ss_.batch_update_debug t.pmap (Hashtbl.to_seq t.prev_map |> List.of_seq);
     t.prev_map <- t.curr_map; (* this is the map that is being merged *)
     t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
@@ -247,7 +247,7 @@ module Writer_1 = struct
           Hashtbl.find_opt t.prev_map k |> function
           | Some v -> map v
           | None -> 
-            String_string_map_.find_opt t.pmap k)    
+            Nv_map_ss_.find_opt t.pmap k)    
     end |> fun r -> 
     assert(
       let expected = Hashtbl.find_opt t.debug k in

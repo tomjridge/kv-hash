@@ -5,7 +5,7 @@ open Util
 
 let time () = Unix.time ()
 
-module Kv = Kv_hash.String_string_map
+module Kv = Kv_hash.Nv_map_ss
 
 let initial_inserts = 1_000_000
 

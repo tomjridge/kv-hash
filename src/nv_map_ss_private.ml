@@ -254,8 +254,8 @@ end
 
 
 module type S = sig
-  include String_string_map_intf.S
-  val batch_update_debug : t -> String_string_map_intf.op list -> unit
+  include Nv_map_ss_intf.S
+  val batch_update_debug : t -> Nv_map_ss_intf.op list -> unit
 end with type phash := Make_1.Phash.t
 
 module Make_2 : S = Make_1
