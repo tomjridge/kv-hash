@@ -27,8 +27,6 @@ may be substantial overhead in the values file.
 
 open Util
 
-module Partition_ = Partition.Partition_ii
-
 module Cache = Cache_2gen
   
 (* cache size *)
@@ -46,7 +44,7 @@ let hash (s:string) =
    values file). *)
 type 'int_map t = {
   values: Values_file.t;
-  mutable p_int_map: 'int_map; (* mutable because RO instances need to
+  mutable nv_int_map: 'int_map; (* mutable because RO instances need to
                                 sync this from disk after a merge *)
   (* deleted: (string,unit)Hashtbl.t; (\* FIXME hack to support delete quickly *\) *)
   cache: (string,string) Cache_2gen.t;
@@ -54,17 +52,18 @@ type 'int_map t = {
 }
 
 
-(** What we need from the large [int->int] map *)
-module type PHASH = sig 
+(** What we need from the large [int->int] Nv_map_ii_intf.S map *)
+module type S1 = sig 
   type t
-  val find_opt : t -> int -> int option
-  val insert   : t -> int -> int -> unit
-  val show_bucket : t -> int -> unit
-  (* val delete   : t -> int -> unit FIXME currently hacked using lookaside hashtable *)
+  type k := int
+  type v := int
+  val find_opt    : t -> k -> v option
+  val insert      : t -> k -> v -> unit
+  val show_bucket : t -> k -> unit
 end
 
 
-module With_phash(Phash:PHASH) = struct
+module Make_1(Nv_map_ii_:S1) = struct
 
   (** Basic implementation, no cache, no debug *)
   module Basic = struct
@@ -72,7 +71,7 @@ module With_phash(Phash:PHASH) = struct
       trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
       begin
         let k' = hash k in
-        Phash.find_opt t.p_int_map k' |> function
+        Nv_map_ii_.find_opt t.nv_int_map k' |> function
         | None -> None
         | Some v' -> 
           Values_file.read_value t.values ~off:v' |> fun v -> 
@@ -85,7 +84,7 @@ module With_phash(Phash:PHASH) = struct
     let insert_hashed t _k hash v = 
       trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
       Values_file.append_value t.values v |> fun off -> 
-      Phash.insert t.p_int_map hash off;
+      Nv_map_ii_.insert t.nv_int_map hash off;
       trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
       ()
 
@@ -116,13 +115,13 @@ module With_phash(Phash:PHASH) = struct
       trace (fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
   end
 
-    (** To augment operations with caching and debugging, we use this signature *)
+  (** To augment operations with caching and debugging, we use this signature *)
   module type S = sig
-    val find_opt : Phash.t t -> string -> string option
-    val insert_hashed : Phash.t t -> string -> int -> string -> unit
-    val insert : Phash.t t -> string -> string -> unit
+    val find_opt : Nv_map_ii_.t t -> string -> string option
+    val insert_hashed : Nv_map_ii_.t t -> string -> int -> string -> unit
+    val insert : Nv_map_ii_.t t -> string -> string -> unit
     val batch :
-      Phash.t t -> (string * [`Delete | `Insert of string ]) list -> unit
+      Nv_map_ii_.t t -> (string * [`Delete | `Insert of string ]) list -> unit
   end
 
   module With_cache(S:S) : S = struct
@@ -171,7 +170,7 @@ module With_phash(Phash:PHASH) = struct
             (if expected=None then "None" else Option.get expected)
             (if r=None then "None" else Option.get r)
             __MODULE__;
-          Phash.show_bucket t.p_int_map (hash k);
+          Nv_map_ii_.show_bucket t.nv_int_map (hash k);
           true (* continue with incorrect value FIXME *) end);
       r
 
@@ -211,7 +210,7 @@ To create given filename fn:
 
 
  *)
-module Make_1 = struct
+module Make_2 = struct
 
   module Config = struct
     (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
@@ -222,41 +221,40 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Phash = Nv_map_ii.Make_2(Config)
+  module Nv_map_ii_ = Nv_map_ii.Make_2(Config)
 
-  module With_phash_ = With_phash(Phash)
+  module Made_1 = Make_1(Nv_map_ii_)
 
   let create ~fn = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    Phash.create ~fn ~n:10_000 |> fun p_int_map -> 
+    Nv_map_ii_.create ~fn ~n:10_000 |> fun nv_int_map -> 
     let values = Values_file.create ~fn:(fn ^".values") in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
-    { values; p_int_map; 
+    { values; nv_int_map; 
       cache=Cache_2gen.create ~young_sz:1_000_000 ~old_sz:1_000_000; 
       debug=Hashtbl.create 1 }
 
-  (* include With_phash_   (\* NOTE no cache *\) *)
-      
-  include With_phash_.With_debug(With_phash_.Basic) (* FIXME add cache when sure this is working correctly *)
+  include Made_1.With_debug(Made_1.Basic) 
+  (* FIXME add cache when sure this is working correctly *)
 
   let close t = 
     Values_file.close t.values;
-    Phash.close t.p_int_map
+    Nv_map_ii_.close t.nv_int_map
 
-  (* let reload_partition t ~fn = Persistent_int_map.reload_partition t.int_map ~fn *)
+  type nv_map_ii = Nv_map_ii_.t
 
-  type phash = Phash.t
-
-  let get_phash t = t.p_int_map
+  let get_nv_map_ii t = t.nv_int_map
       
-  type nonrec t = Phash.t t
+  type nonrec t = Nv_map_ii_.t t
 end
 
-
-module type S = sig
+(** Add an extra function we need; expose Nv_map_ii_ submodule *)
+module type S2 = sig
+  module Nv_map_ii_ : module type of Make_2.Nv_map_ii_
   include Nv_map_ss_intf.S
   val batch_update_debug : t -> Nv_map_ss_intf.op list -> unit
-end with type phash := Make_1.Phash.t
+end 
+with type nv_map_ii := Make_2.Nv_map_ii_.t
 
-module Make_2 : S = Make_1
+module Make_3 : S2 = Make_2
 

@@ -157,21 +157,21 @@ module Writer_1 = struct
     mutable curr_log    : Log_file_w.t;
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
-    mutable pmap        : Nv_map_ss_.t;
+    mutable nv_map_ss        : Nv_map_ss_.t;
     debug               : (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
     debug_log           : Stdlib.out_channel;
   }
   (** check_merge: whether we need to check the old merge has
      completed before launching a new one; the int is the pid *)
 
-  let create ~ctl_fn ~max_log_len ~pmap_fn = 
+  let create ~ctl_fn ~max_log_len ~nv_map_ss_fn = 
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
-    let pmap = Nv_map_ss_.create ~fn:pmap_fn in
-    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;pmap;debug=Hashtbl.create 1024; debug_log=(Stdlib.open_out_bin "debug_log") }
+    let nv_map_ss = Nv_map_ss_.create ~fn:nv_map_ss_fn in
+    { max_log_len;ctl;prev_map;gen;curr_log;curr_map;check_merge=None;nv_map_ss;debug=Hashtbl.create 1024; debug_log=(Stdlib.open_out_bin "debug_log") }
 
   let switch_logs t = 
     begin    (* check for completion of a previous merge, and reload a new
@@ -196,9 +196,9 @@ module Writer_1 = struct
           | false -> ()
           | true -> 
             warn(fun () -> Printf.sprintf "Reloading partition from file part_%d\n" gen);
-            Nv_map_ss_.get_phash t.pmap |> fun phash -> 
-            Nv_map_ss_private.Make_1.Phash.reload_partition 
-              phash
+            Nv_map_ss_.get_nv_map_ii t.nv_map_ss |> fun map_ii -> 
+            Nv_map_ss_.Nv_map_ii_.reload_partition 
+              map_ii
               ~fn:(part_fn gen)
         end;
     end;
@@ -209,7 +209,7 @@ module Writer_1 = struct
         (* child *) 
         Merge_process_.merge_and_exit 
           ~gen
-          ~pmap:t.pmap
+          ~nv_map_ss:t.nv_map_ss
           ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq) (* NOTE curr_map! *)
       | pid -> 
         (* parent *)
@@ -220,11 +220,11 @@ module Writer_1 = struct
     (* after a batch operation, the debug state is altered in the
        merge thread, but not in the main thread FIXME could put these
        ops in the pending merge *)
-    Nv_map_ss_.batch_update_debug t.pmap (Hashtbl.to_seq t.prev_map |> List.of_seq);
+    Nv_map_ss_.batch_update_debug t.nv_map_ss (Hashtbl.to_seq t.prev_map |> List.of_seq);
     t.prev_map <- t.curr_map; (* this is the map that is being merged *)
     t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
-    t.pmap <- t.pmap; (* NOTE partition change from a merge is dealt with above *)
+    t.nv_map_ss <- t.nv_map_ss; (* NOTE partition change from a merge is dealt with above *)
     (* update gen last *)
     t.gen <- new_gen;
     Control.(set_field t.ctl F.current_log t.gen); 
@@ -240,7 +240,7 @@ module Writer_1 = struct
           Hashtbl.find_opt t.prev_map k |> function
           | Some v -> map v
           | None -> 
-            Nv_map_ss_.find_opt t.pmap k)    
+            Nv_map_ss_.find_opt t.nv_map_ss k)    
     end |> fun r -> 
     assert(
       let expected = Hashtbl.find_opt t.debug k in
@@ -291,7 +291,7 @@ end
 
 module type WRITER = sig
   type t 
-  val create   : ctl_fn:string -> max_log_len:int -> pmap_fn:string -> t
+  val create   : ctl_fn:string -> max_log_len:int -> nv_map_ss_fn:string -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit
   val delete   : t -> string -> unit
@@ -308,7 +308,7 @@ module Test() = struct
 
   let _ = 
     Printf.printf "%s: test starts\n%!" __MODULE__;
-    let t = Writer.create ~ctl_fn:"ctl" ~max_log_len:32_000_000 ~pmap_fn:"pmap" in
+    let t = Writer.create ~ctl_fn:"ctl" ~max_log_len:32_000_000 ~nv_map_ss_fn:"pmap" in
     begin
       0 |> iter_k (fun ~k:kont i -> 
           match i < lim with

@@ -8,7 +8,7 @@ NOTE since fds are inherited, this is not safe to use in a
 
 *)
 
-module type VALUES = 
+module type S = 
 sig
   type t 
   val append_value : t -> string -> int
@@ -84,6 +84,6 @@ module Make_1 = struct
     ()
 end
 
-module Make_2 : VALUES = Make_1
+module Make_2 : S = Make_1
 
 include Make_2
