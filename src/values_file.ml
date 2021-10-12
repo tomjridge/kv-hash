@@ -1,6 +1,12 @@
 (** A file containing a collection of "values" (the values stored in
    the [int->int] map are the offsets of the real values within the
-   values file). *)
+   values file).
+
+NOTE since fds are inherited, this is not safe to use in a
+   multiprocess environment - the use of seek for read_value causes
+   problems; use reload in the child process instead
+
+*)
 
 module type VALUES = 
 sig
@@ -11,6 +17,11 @@ sig
   val open_ : fn:string -> t
   val flush : t -> unit
   val close : t -> unit
+
+  val reload: t -> unit
+  (** close all existing channels and reopen; this is used for child
+     processes to avoid concurrency issues arising from file offsets
+     and seeking *)
 end
 
 module Make_1 = struct
@@ -22,8 +33,8 @@ module Make_1 = struct
   (* ASSUMES safe to use in and out channels on a single underlying file *)
   type t = {
     fn   : string;
-    ch_r : Stdlib.in_channel;
-    ch_w : Stdlib.out_channel;
+    mutable ch_r : Stdlib.in_channel;
+    mutable ch_w : Stdlib.out_channel;
   }
 
   (* we implement string read/write using basic in/out channel
@@ -63,6 +74,13 @@ module Make_1 = struct
     flush t;
     close_in_noerr t.ch_r;
     close_out_noerr t.ch_w;
+    ()
+
+  let reload t =
+    close t;
+    open_ ~fn:t.fn |> fun { ch_r; ch_w; _ } -> 
+    t.ch_r <- ch_r;
+    t.ch_w <- ch_w;
     ()
 end
 

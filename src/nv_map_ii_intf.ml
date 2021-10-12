@@ -23,12 +23,24 @@ module type S = sig
   val find_opt : t -> k -> r option
 
   (** Private operation to reload a partition after concurrent
-     modification of store by another process *)
-  val reload_partition: t -> fn:string -> unit
+     modification of store by another process FIXME remove this - we
+     can go via get_partition *)
+  val reload_partition: t -> fn:string -> unit    
+
+
+  (** Access to subcomponents *)
 
   type partition
 
   val get_partition: t -> partition
+
+(* we don't have this in pers_hashtable 
+  type values
+
+  val get_values : t -> values
+*)
+
+  (* debug *)
 
   val export : t -> export_t
 

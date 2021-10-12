@@ -1,8 +1,12 @@
+(** FIXME this doesn't have a values file... it just combines
+   partition and bucket *)
+
+
 (* open Bigarray *)
 open Util
 open Bucket_intf
 (* open Bucket *)
-open Persistent_hashtable_intf
+open Nv_map_ii_intf
 
 module Partition_ = Partition.Partition_ii
 
@@ -188,11 +192,10 @@ module Make_1(Config:CONFIG) = struct
   let show_bucket t k = 
     find_bucket t k |> fun (_,b) -> Rawb.show b.rawb
     
-
 end (* Make *)
 
 module type S = 
-  Persistent_hashtable_intf.S 
+  Nv_map_ii_intf.S 
   with type k=int 
    and type r=int
    and type partition := Partition_.t

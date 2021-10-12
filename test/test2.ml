@@ -1,3 +1,3 @@
 (** Test executable *)
 
-module X = Kv_hash.Persistent_hashtable.Test2()
+module X = Kv_hash.Nv_map_ii.Test2()

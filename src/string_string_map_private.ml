@@ -45,7 +45,7 @@ let hash (s:string) =
    [int->int] map is really a map from hash(key) to offset(of value in
    values file). *)
 type 'int_map t = {
-  values: Values.t;
+  values: Values_file.t;
   mutable p_int_map: 'int_map; (* mutable because RO instances need to
                                 sync this from disk after a merge *)
   (* deleted: (string,unit)Hashtbl.t; (\* FIXME hack to support delete quickly *\) *)
@@ -75,7 +75,7 @@ module With_phash(Phash:PHASH) = struct
         Phash.find_opt t.p_int_map k' |> function
         | None -> None
         | Some v' -> 
-          Values.read_value t.values ~off:v' |> fun v -> 
+          Values_file.read_value t.values ~off:v' |> fun v -> 
           Some v
       end |> fun r -> 
       trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
@@ -84,7 +84,7 @@ module With_phash(Phash:PHASH) = struct
     (* hash is the hash of k *)
     let insert_hashed t _k hash v = 
       trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-      Values.append_value t.values v |> fun off -> 
+      Values_file.append_value t.values v |> fun off -> 
       Phash.insert t.p_int_map hash off;
       trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
       ()
@@ -222,14 +222,14 @@ module Make_1 = struct
     let blk_sz = 4096
   end
 
-  module Phash = Persistent_hashtable.Make_2(Config)
+  module Phash = Nv_map_ii.Make_2(Config)
 
   module With_phash_ = With_phash(Phash)
 
   let create ~fn = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     Phash.create ~fn ~n:10_000 |> fun p_int_map -> 
-    let values = Values.create ~fn:(fn ^".values") in
+    let values = Values_file.create ~fn:(fn ^".values") in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     { values; p_int_map; 
       cache=Cache_2gen.create ~young_sz:1_000_000 ~old_sz:1_000_000; 
@@ -240,7 +240,7 @@ module Make_1 = struct
   include With_phash_.With_debug(With_phash_.Basic) (* FIXME add cache when sure this is working correctly *)
 
   let close t = 
-    Values.close t.values;
+    Values_file.close t.values;
     Phash.close t.p_int_map
 
   (* let reload_partition t ~fn = Persistent_int_map.reload_partition t.int_map ~fn *)
