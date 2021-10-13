@@ -22,18 +22,18 @@ module Nv_map_ss_ = Nv_map_ss_private.Make_2
 module Merge_process_ = Merge_process.Make(Nv_map_ss_)
 
 module KV = struct
-  (* open Bin_prot.Std *)
-  type k = string
-  type v = string
+  open Bin_prot.Std
+  type k = string[@@deriving bin_io]
+  type v = string[@@deriving bin_io]
 end
 
 module Op = struct
   open KV
-  type op = k * [`Insert of v | `Delete ]
+  type op = k * [`Insert of v | `Delete ][@@deriving bin_io]
 end    
 open Op
 
-
+(* Version using out_channel 
 module Log_file_w = struct
 
   type t = {
@@ -54,6 +54,46 @@ module Log_file_w = struct
   let close t = close_out_noerr t.oc
 
 end
+*)
+
+module Log_file_w = struct
+  type t = {
+    fn          :string;
+    max_sz      : int;
+    fd          : Unix.file_descr;
+    mmap        : Mmap.char_mmap;
+    buf         : Mmap.char_bigarray;
+    mutable pos : int;
+  }
+
+  let create ~fn ~max_sz = 
+    let fd = Unix.(openfile fn [O_CREAT;O_RDWR;O_TRUNC] 0o640) in
+    let mmap = Mmap.of_fd fd Mmap.char_kind in
+    let buf = Mmap.sub mmap ~off:0 ~len:max_sz in
+    {
+      fn;
+      max_sz;    
+      fd;
+      mmap;
+      buf;
+      pos=0
+    }
+
+  let write t op = 
+    try begin
+      bin_write_op t.buf ~pos:t.pos op |> fun pos' -> 
+      t.pos <- pos';
+      `Ok
+    end
+    with Bin_prot.Common.Buffer_short -> `Buffer_short
+
+  (* FIXME may want to have a "closed" flag which we check *)
+  let close t = 
+    Mmap.close t.mmap;
+    t.pos <- -1;
+    ()
+end
+
 
 module Log_file_r = struct
 
@@ -162,8 +202,8 @@ module Writer_1 = struct
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
-    let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
-    let curr_map = Hashtbl.create 1024 in
+    let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_sz:max_log_len in
+    let curr_map = Hashtbl.create (max_log_len / (8+8))  in  (* approx how many entries in log for tezos *)
     let nv_map_ss = Nv_map_ss_.create ~fn:nv_map_ss_fn in
     let lru_ss = Lru_ss.create 2_000_000 in (* capacity is 2M *) 
     { max_log_len;
@@ -239,7 +279,8 @@ module Writer_1 = struct
        ops in the pending merge *)
     Nv_map_ss_.batch_update_debug t.nv_map_ss (Hashtbl.to_seq t.prev_map |> List.of_seq);
     t.prev_map <- t.curr_map; (* this is the map that is being merged *)
-    t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_log_len:t.max_log_len;
+    Log_file_w.close t.curr_log;
+    t.curr_log <- Log_file_w.create ~fn:(log_fn new_gen) ~max_sz:t.max_log_len;
     t.curr_map <- Hashtbl.create 1024;
     t.nv_map_ss <- t.nv_map_ss; (* NOTE partition change from a merge is dealt with above *)
     (* update gen last *)
@@ -272,12 +313,11 @@ module Writer_1 = struct
     (* write to active log if enough space and update curr_map;
        otherwise switch to new log and merge old; then insert in new
        log *)
-    match Log_file_w.can_write t.curr_log with
-    | true -> 
-      Log_file_w.write t.curr_log (`Insert(k,v));      
+    match Log_file_w.write t.curr_log (k,`Insert v) with
+    | `Ok -> 
       Hashtbl.replace t.curr_map k (`Insert v);
       ()
-    | false -> 
+    | `Buffer_short -> 
       switch_logs t;
       insert t k v
 
