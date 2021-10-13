@@ -148,11 +148,15 @@ module Writer_1 = struct
     mutable curr_map    : (k,[`Insert of v | `Delete])Hashtbl.t;
     mutable check_merge : check_merge_t option;
     mutable nv_map_ss   : Nv_map_ss_.t;
+    lru_ss              : Lru_ss.t;
     debug               : (k,v)Hashtbl.t; (* debug all inserts/deletes/finds *)
     debug_log           : Stdlib.out_channel;
   }
   (** check_merge: whether we need to check the old merge has
-     completed before launching a new one; the int is the pid *)
+     completed before launching a new one; the int is the pid
+
+      lru_ss: an Lru that sits behind the logs but in front of nv_map_ss
+  *)
 
   let create ~ctl_fn ~max_log_len ~nv_map_ss_fn = 
     let ctl = Control.create ~fn:ctl_fn in
@@ -161,6 +165,7 @@ module Writer_1 = struct
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_log_len in
     let curr_map = Hashtbl.create 1024 in
     let nv_map_ss = Nv_map_ss_.create ~fn:nv_map_ss_fn in
+    let lru_ss = Lru_ss.create 2_000_000 in (* capacity is 2M *) 
     { max_log_len;
       ctl;
       prev_map;
@@ -169,6 +174,7 @@ module Writer_1 = struct
       curr_map;
       check_merge=None;
       nv_map_ss;
+      lru_ss;
       debug=Hashtbl.create 1024; 
       debug_log=(Stdlib.open_out_bin "debug_log") }
 
@@ -180,7 +186,7 @@ module Writer_1 = struct
       | None -> () (* should happen only when merging the very first log *)
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
-
+        
         begin    (* wait for merge *)
           let t1 = Unix.time () in
           warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
@@ -206,18 +212,26 @@ module Writer_1 = struct
         end;
     end;
     begin 
+      (* before we merge, we take care to update the Lru with the
+         entries to be merged; we also trim the Lru at this point;
+         FIXME the Lru is potentially unbounded if finds occur without
+         merging *)
+      Lru_ss.batch_adjust t.lru_ss t.curr_map;
+      Lru_ss.trim t.lru_ss
+    end;
+    begin 
       let gen = t.gen in
       Unix.fork () |> function 
-      | 0 -> 
-        (* child *) 
-        Merge_process_.merge_and_exit 
-          ~gen
-          ~nv_map_ss:t.nv_map_ss
-          ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq) (* NOTE curr_map! *)
-      | pid -> 
-        (* parent *)
-        t.check_merge <- Some{pid;gen};
-        () (* NOTE parent will continue after this begin..end block *)
+      | 0 -> (
+          (* child *) 
+          Merge_process_.merge_and_exit 
+            ~gen
+            ~nv_map_ss:t.nv_map_ss
+            ~ops:(Hashtbl.to_seq t.curr_map |> List.of_seq)) (* NOTE curr_map! *)
+      | pid -> (
+          (* parent *)
+          t.check_merge <- Some{pid;gen};
+          ()) (* NOTE parent will continue after this begin..end block *)
     end;
     let new_gen = t.gen +1 in
     (* after a batch operation, the debug state is altered in the
@@ -233,6 +247,7 @@ module Writer_1 = struct
     Control.(set_field t.ctl F.current_log t.gen); 
     ()
 
+  (* FIXME at the moment the Lru can grow without bound, if there are repeated finds *)
   let find_opt t k = 
     begin
       let map = function `Insert v -> Some v | `Delete -> None in
@@ -242,7 +257,15 @@ module Writer_1 = struct
           Hashtbl.find_opt t.prev_map k |> function
           | Some v -> map v
           | None -> 
-            Nv_map_ss_.find_opt t.nv_map_ss k)    
+            Lru_ss.find k t.lru_ss |> function
+            | None -> (
+              let v = Nv_map_ss_.find_opt t.nv_map_ss k in
+              match v with 
+              | None -> None
+              | Some v -> (Lru_ss.add k v t.lru_ss; Some v))
+            | Some v -> 
+              Lru_ss.promote k t.lru_ss;
+              Some v)
     end
 
   let rec insert t k v = 
@@ -274,6 +297,14 @@ module Writer_1 = struct
 *)
     
   let close t = 
+    (* wait for the merge to finish *)
+    begin match t.check_merge with
+      | None -> ()
+      | Some {pid; _} -> 
+        Unix.waitpid [] pid |> fun (_pid,status) -> 
+        assert(status = WEXITED 0);
+        ()
+    end;
     Mmap.close t.ctl.ctl_mmap;
     Log_file_w.close t.curr_log;
     ()    

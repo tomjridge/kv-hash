@@ -292,3 +292,40 @@ module Consts = struct
 
 end
 include Consts
+
+
+(** A mutable Lru for string->string map; at the moment this does not
+   record negative information (this key is not present) but perhaps
+   it should FIXME *)
+module Lru_ss = struct
+
+  module K = struct
+    include String
+    let hash (s:string) : int = Hashtbl.hash s
+  end
+  
+  module V = struct
+    type t = string
+    let weight : t -> int = fun _ -> 1
+  end
+
+  (** NOTE a mutable Lru; you have to call trim explicitly *)
+  include Lru.M.Make(K)(V)
+
+  type tbl = (string,[`Insert of string | `Delete]) Hashtbl.t
+
+  (** Adjust the Lru, given a recent set of operations; assuming the
+     lru is small wrt. the operations, we just loop through the lru
+     updating any values that have been updated by the operations; new
+     operations do not get added automatically; we do not trim *)
+  let batch_adjust t (tbl:tbl) = 
+    (* Don't rely on Lru allowing mutations during iteration *)
+    let kvs = to_list t in
+    kvs |> List.iter (fun (k,_) -> 
+        Hashtbl.find_opt tbl k |> function
+        | Some (`Insert v) -> add k v t
+        | Some (`Delete) -> failwith "Lru_ss: delete: not supported"
+        | None -> ());
+    ()
+    
+end
