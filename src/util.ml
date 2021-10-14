@@ -19,11 +19,10 @@ let dest_Some = function
 
 (* trace execution *)
 let trace = 
-  try 
-    ignore(Sys.getenv "DEBUG_KVHASH");
-    fun s -> print_endline (s())
-  with Not_found -> fun s -> ignore(s); ()
-[@@warning "-27"]
+  match Config.debug with
+  | false -> fun s -> ignore(s); ()
+  | true -> fun s -> print_endline (s())
+
 
 let warn (s:unit->string) = 
   print_endline (s())
@@ -280,18 +279,7 @@ module Sexp_trace = struct
 end
 
 
-module Consts = struct
-
-  let const_4GB = 4_294967296
-
-  let const_1GiB = 1_073_741_824
-
-  let const_1k = 1024
-
-  let const_1M = 1_000_000
-
-end
-include Consts
+include Config.Consts
 
 
 (** A mutable Lru for string->string map; at the moment this does not
