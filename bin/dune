@@ -1,5 +1,0 @@
-(executable
- (name "example")
- (modules example)
- (libraries kv_hash))
-
