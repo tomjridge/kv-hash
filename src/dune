@@ -2,7 +2,7 @@
  (public_name "kv_hash")
  (name "kv_hash")
  (preprocess (pps ppx_sexp_conv ppx_sexp_message ppx_bin_prot))
- (libraries base sexplib tjr_mmap bin_prot xxhash threads ctypes core.bigstring_unix lru))
+ (libraries base stdio sexplib tjr_mmap bin_prot xxhash threads ctypes core.bigstring_unix lru))
 ; ctypes for coerce_bigarray1
 ; core for bigstring io
 

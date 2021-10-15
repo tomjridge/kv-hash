@@ -15,25 +15,25 @@ module type CONFIG = sig
   val blk_sz : int (* in bytes *)
 end
 
-module Make_1(Config:CONFIG) = struct
+module Make_1(Config_:CONFIG) = struct
 
-  open Config
-  let blk_sz = Config.blk_sz
+  open Config_
+  let blk_sz = Config_.blk_sz
 
   module Bucket_config = struct
-    include Config
+    include Config_
     let len = blk_sz / Bigarray.(kind_size_in_bytes Int)
   end
 
   (* Raw bucket *)
   module Rawb' = Bucket.Make(Bucket_config)
   (* Add debugging at runtime; FIXME expensive? prefer simple module expression? *)
-  let rawb = Sys.getenv_opt "DEBUG_BUCKET" |> function
-    | None -> (module Rawb' : BUCKET with type t = Rawb'.t)
-    | Some _ -> (module (struct
-                  include Rawb'
-                  include Rawb'.With_debug()
-                end))
+  let rawb = Config.config.debug_bucket |> function
+    | false -> (module Rawb' : BUCKET with type t = Rawb'.t)
+    | true -> (module (struct
+                include Rawb'
+                include Rawb'.With_debug()
+              end))
   module Rawb = (val rawb)
 
   type bucket = { blk_i:int; rawb: Rawb.t }
@@ -43,7 +43,7 @@ module Make_1(Config:CONFIG) = struct
   let _ = trace (fun () ->  
       let open Sexplib.Std in
       Sexplib.Sexp.to_string_hum 
-        [%message "Config"
+        [%message "Config_"
             ~blk_sz:(blk_sz : int)
             ~ints_per_block:(ints_per_block : int)
             ~max_sorted:(max_sorted : int)
@@ -55,43 +55,40 @@ module Make_1(Config:CONFIG) = struct
   type k = int
   type r = int
 
-  module Prt = Partition_      
-
   (** Create an initial n-way partition, with values provided by alloc *)
   let initial_partitioning ~alloc ~n = 
     let delta = Int.max_int / n in
     Base.List.range ~stride:delta ~start:`inclusive ~stop:`inclusive 0 ((n-1)*delta) |> fun ks -> 
     ks |> List.map (fun x -> x,alloc ()) |> fun krs -> 
-    Prt.of_list krs
+    Partition_.of_list krs
 
   (* Runtime handle *)
   type t = {
-    fn                : string; (* filename *)
+    buckets_fn        : string; (* filename *)
     fd                : Unix.file_descr;
     alloc_counter     : int ref;
     alloc             : unit -> int;
-    mutable partition : Prt.t; (* NOTE mutable *)
+    mutable partition : Partition_.t; (* NOTE mutable *)
   }
 
 
   (* create with an initial partition *)
-  let create_p ~fn ~partition = 
+  let create_p ~buckets_fn ~partition = 
     (* Bigstring_unix requires fd to be non-blocking for pwrite *)
-    Core.Unix.(openfile ~mode:[O_CREAT;O_RDWR; O_TRUNC;O_NONBLOCK] fn) |> fun fd -> 
-    Unix.ftruncate fd (const_4GB);
+    Core.Unix.(openfile ~mode:[O_CREAT;O_RDWR; O_TRUNC;O_NONBLOCK] buckets_fn) |> fun fd -> 
+    Unix.ftruncate fd (Config.config.initial_bucket_store_size);
     (* let data = Mmap.of_fd fd Bigarray.int in *)
     (* keep block 0 for header etc *)
-    let max_r = partition |> Prt.to_list |> List.map snd |> List.fold_left max 1 in
+    let max_r = partition |> Partition_.to_list |> List.map snd |> List.fold_left max 1 in
     let alloc_counter = ref (1+max_r) in
     let alloc () = 
       !alloc_counter |> fun r -> 
       incr alloc_counter;
       r
     in
-    { fn; fd; alloc_counter; alloc; partition }
+    { buckets_fn; fd; alloc_counter; alloc; partition }
 
-  (** n is the initial number of partitions of 0...max_int *)
-  let create ~fn ~n =
+  let create_n ~buckets_fn ~n =
     let alloc_counter = ref 1 in
     let alloc () = 
       !alloc_counter |> fun r -> 
@@ -99,7 +96,11 @@ module Make_1(Config:CONFIG) = struct
       r
     in
     let partition = initial_partitioning ~alloc ~n in
-    create_p ~fn ~partition
+    create_p ~buckets_fn ~partition
+
+  let create ~buckets_fn =
+    let n = Config.config.initial_number_of_partitions in
+    create_n ~buckets_fn ~n
 
   let close t = 
     Unix.close t.fd;
@@ -129,7 +130,7 @@ module Make_1(Config:CONFIG) = struct
      threads, when we assume one of the threads is a reader, so will
      not mutate the bucket *)
   let find_bucket t k = 
-    Prt.find t.partition k |> fun (k,blk_i) -> 
+    Partition_.find t.partition k |> fun (k,blk_i) -> 
     (* blk_i is the blk index within the store *)
     let bucket = read_bucket t ~blk_i in
     k,bucket
@@ -150,7 +151,7 @@ module Make_1(Config:CONFIG) = struct
       let r1,r2 = t.alloc(),t.alloc() in      
       let b1,b2 = {blk_i=r1;rawb=b1 },{blk_i=r2;rawb=b2} in
       trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
-      Prt.split t.partition ~k1 ~r1 ~k2 ~r2;
+      Partition_.split t.partition ~k1 ~r1 ~k2 ~r2;
       sync_bucket t b1;
       sync_bucket t b2;
       ()  
@@ -164,7 +165,7 @@ module Make_1(Config:CONFIG) = struct
 
   (* FIXME this can just be with partition, no? since partition is mutable anyway *)
   let reload_partition t ~fn =     
-    let partition = Prt.read_fn ~fn in
+    let partition = Partition_.read_fn ~fn in
     let max_r = 
       Partition_.to_list partition |> fun krs -> 
       krs |> List.map snd |> List.fold_left max 0
@@ -177,7 +178,7 @@ module Make_1(Config:CONFIG) = struct
   (** {2 Debugging} *)
 
   let export t = 
-    Prt.to_list t.partition |> fun krs -> 
+    Partition_.to_list t.partition |> fun krs -> 
     krs |> List.map (fun (k,_) -> 
         find_bucket t k |> function (_,b) -> Rawb.export b.rawb) |> fun buckets -> 
     {partition=krs;buckets}
@@ -204,24 +205,24 @@ module Make_1(Config:CONFIG) = struct
     
 end (* Make *)
 
-module Make_2(Config:CONFIG) : Nv_map_ii_intf.S = Make_1(Config)
+module Make_2(Config_:CONFIG) : Nv_map_ii_intf.S = Make_1(Config_)
 
 
 module Test() = struct
   
-  module Config = struct
+  module Config_ = struct
     let max_sorted = 2
     let max_unsorted = 1
     let blk_sz = 8*8
 
   end
 
-  module M = Make_1(Config)
+  module M = Make_1(Config_)
   open M
 
-  let init_partition = [(0,1);(20,2);(40,3);(60,4);(80,5);(100,5)] |> Prt.of_list
+  let init_partition = [(0,1);(20,2);(40,3);(60,4);(80,5);(100,5)] |> Partition_.of_list
 
-  let t = create_p ~fn:"test.db" ~partition:init_partition
+  let t = create_p ~buckets_fn:"test.db" ~partition:init_partition
 
   let _ = show t
 
@@ -270,7 +271,7 @@ end
 
 module Test2() = struct
 
-  module Config = struct
+  module Config_ = struct
     (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
        sorted; 255 kvs for unsorted and sorted *)
     
@@ -279,10 +280,10 @@ module Test2() = struct
     let blk_sz = 4096
   end
 
-  module M = Make_1(Config)
+  module M = Make_1(Config_)
   open M
 
-  let t = create ~fn:"test.db" ~n:10_000
+  let t = create_n ~buckets_fn:"test.db" ~n:10_000
 
   let lim = 10_000_000
 
@@ -299,7 +300,7 @@ module Test2() = struct
 (*
 make -k run_test 
 time OCAMLRUNPARAM=b dune exec test/test2.exe
-(Config (blk_sz 4096) (ints_per_block 512) (max_sorted 245) (max_unsorted 10)
+(Config_ (blk_sz 4096) (ints_per_block 512) (max_sorted 245) (max_unsorted 10)
  (bucket_size_ints 512) (bucket_size_bytes 4096))
 Inserting 1000000 kvs
 

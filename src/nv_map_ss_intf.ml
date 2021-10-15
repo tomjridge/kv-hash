@@ -6,7 +6,7 @@ type op = string * [ `Insert of string | `Delete ]
 
 module type S = sig
   type t
-  val create   : fn:string -> t
+  val create   : ?buckets_fn:string -> ?values_fn:string -> unit -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit
   val batch    : t -> op list -> unit

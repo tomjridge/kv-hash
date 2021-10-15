@@ -17,7 +17,10 @@ module type S_kr = sig
   type k
   type r
 
-  val create : fn:string -> n:int -> t
+  (** Create with initial number of partitions *)
+  val create_n : buckets_fn:string -> n:int -> t
+
+  val create   : buckets_fn:string -> t
 
   val close : t -> unit
 

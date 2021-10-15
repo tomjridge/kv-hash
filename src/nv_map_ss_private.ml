@@ -209,23 +209,26 @@ To create given filename fn:
 *)
 module Make_2 = struct
 
-  module Config = struct
+  module Config_ = struct
     (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
        sorted; 255 kvs for unsorted and sorted *)
 
-    let max_unsorted = 10
-    let max_sorted = 255 - max_unsorted
-    let blk_sz = 4096
+    let max_unsorted = Config.config.bucket_unsorted
+    let max_sorted = Config.config.bucket_sorted
+    let blk_sz = Config.config.blk_sz
   end
 
-  module Nv_map_ii_ = Nv_map_ii.Make_2(Config)
+  module Nv_map_ii_ = Nv_map_ii.Make_2(Config_)
 
   module Made_1 = Make_1(Nv_map_ii_)
 
-  let create ~fn = 
+  let create 
+      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?values_fn:(values_fn=Config.config.values_fn)
+      () = 
     trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
-    Nv_map_ii_.create ~fn ~n:10_000 |> fun nv_int_map -> 
-    let values = Values_file.create ~fn:(fn ^".values") in
+    Nv_map_ii_.create ~buckets_fn |> fun nv_int_map -> 
+    let values = Values_file.create ~fn:values_fn in
     trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     { values; 
       nv_int_map; 

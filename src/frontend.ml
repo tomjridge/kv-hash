@@ -198,14 +198,20 @@ module Writer_1 = struct
       lru_ss: an Lru that sits behind the logs but in front of nv_map_ss
   *)
 
-  let create ~ctl_fn ~max_log_len ~nv_map_ss_fn = 
+  let create 
+      ?max_log_len:(max_log_len=Config.config.max_log_length) 
+      ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
+      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?values_fn:(values_fn=Config.config.values_fn)
+      () 
+    = 
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
     let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_sz:max_log_len in
     let curr_map = Hashtbl.create (max_log_len / (8+8))  in  (* approx how many entries in log for tezos *)
-    let nv_map_ss = Nv_map_ss_.create ~fn:nv_map_ss_fn in
-    let lru_ss = Lru_ss.create 2_000_000 in (* capacity is 2M *) 
+    let nv_map_ss = Nv_map_ss_.create ~buckets_fn ~values_fn () in
+    let lru_ss = Lru_ss.create Config.config.lru_capacity in
     { max_log_len;
       ctl;
       prev_map;
@@ -217,6 +223,8 @@ module Writer_1 = struct
       lru_ss;
       debug=Hashtbl.create 1024; 
       debug_log=(Stdlib.open_out_bin "debug_log") }
+
+  let _ = create
 
   let switch_logs t = 
     begin    
@@ -379,7 +387,7 @@ end
 
 module type WRITER = sig
   type t 
-  val create   : ctl_fn:string -> max_log_len:int -> nv_map_ss_fn:string -> t
+  val create   : ?max_log_len:int -> ?ctl_fn:string -> ?buckets_fn:string -> ?values_fn:string -> unit -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit
   val delete   : t -> string -> unit
@@ -396,7 +404,9 @@ module Test() = struct
 
   let _ = 
     Printf.printf "%s: test starts\n%!" __MODULE__;
-    let t = Writer.create ~ctl_fn:"ctl" ~max_log_len:32_000_000 ~nv_map_ss_fn:"pmap" in
+    let t = Writer.create 
+        ~max_log_len:32_000_000 ~ctl_fn:"ctl" ~buckets_fn:"buckets" ~values_fn:"values" () 
+    in
     begin
       0 |> iter_k (fun ~k:kont i -> 
           match i < lim with
