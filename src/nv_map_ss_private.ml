@@ -246,7 +246,7 @@ module Make_2 = struct
 
   type nv_map_ii = Nv_map_ii_.t
 
-  let get_nv_map_ii t = t.nv_int_map
+  let get_nv_map_ii t : nv_map_ii = t.nv_int_map
       
   type nonrec t = Nv_map_ii_.t t
 

@@ -8,7 +8,7 @@
 ; test6: frontend test
 ; IGNORE test7: unbuffered writes performance
 ; IGNORE test8: bigarray coerce
-
+; test9: load partition
 
 (executable
  (name "test1")
@@ -50,6 +50,11 @@
  (modules test8)
  (libraries extunix bigstringaf ctypes))
 
+(executable
+ (name "test9") ; bigarray kind casting
+ (modules test9)
+ (libraries kv_hash))
+
 (alias
  (name "executables")
- (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe))
+ (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe))

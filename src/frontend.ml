@@ -109,7 +109,7 @@ module Log_file_r = struct
     
   (* soft limit *)
   let can_read t = pos_in t.ic < (Stdlib.in_channel_length t.ic)
-
+                                 
   let rec read t : op = 
     try 
       input_value t.ic
@@ -208,10 +208,22 @@ module Writer_1 = struct
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
-    let curr_log = Log_file_w.create ~fn:(log_fn gen) ~max_sz:max_log_len in
+    let curr_log = 
+      Log_file_w.create ~fn:(log_fn gen) ~max_sz:max_log_len |> fun log -> 
+      Control.(set_field ctl F.current_log gen);
+      log
+    in
     let curr_map = Hashtbl.create (max_log_len / (8+8))  in  (* approx how many entries in log for tezos *)
     let nv_map_ss = Nv_map_ss_.create ~buckets_fn ~values_fn () in
     let lru_ss = Lru_ss.create Config.config.lru_capacity in
+    let _ =
+      (* make sure we write an initial partition to partition 0 *)
+      Nv_map_ss_.get_nv_map_ii nv_map_ss |> fun ii -> 
+      Nv_map_ss_.Nv_map_ii_.get_partition ii |> fun part -> 
+      Partition.Partition_ii.write_fn part ~fn:(part_fn 0);
+      Control.(set_field ctl F.partition 0);
+      ()
+    in
     { max_log_len;
       ctl;
       prev_map;
@@ -225,6 +237,20 @@ module Writer_1 = struct
       debug_log=(Stdlib.open_out_bin "debug_log") }
 
   let _ = create
+
+  let open_ 
+      ?max_log_len:(max_log_len=Config.config.max_log_length) 
+      ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
+      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?values_fn:(values_fn=Config.config.values_fn)
+      () 
+    =
+    (* get current log and part from the ctl file *)
+    let log_n,part_n = 1,2 in
+    (* check log_n, log_predn exist *)
+    (* merge log_predn if it exists *)
+    (* FIXME how do we know how far we are in log_n? perhaps prefer to use oc *)
+    ()[@@warning "-26-27"]
 
   let switch_logs t = 
     begin    
@@ -249,14 +275,17 @@ module Writer_1 = struct
         t.check_merge <- None;
 
         begin    (* Check if part_1234 exists, and if so, reload partition *)
-          Sys.file_exists (part_fn gen) |> function
+          let part_mmmm = part_fn gen in
+          Sys.file_exists part_mmmm |> function
           | false -> ()
           | true -> 
-            warn(fun () -> Printf.sprintf "Reloading partition from file part_%d\n" gen);
+            warn(fun () -> Printf.sprintf "Reloading partition from file %s\n" part_mmmm);
             Nv_map_ss_.get_nv_map_ii t.nv_map_ss |> fun map_ii -> 
             Nv_map_ss_.Nv_map_ii_.reload_partition 
               map_ii
-              ~fn:(part_fn gen)
+              ~fn:part_mmmm;
+            Control.(set_field t.ctl F.partition gen);
+            ()
         end;
     end;
     begin 
