@@ -10,12 +10,14 @@ module type PURE_PARTITION = sig
   val of_list : (k * r) list -> t
   val length  : t -> int
 
+(*
   val write   : t -> out_channel -> unit
   val read    : in_channel -> t
+*)
 end
 
 
-(** An impure interface, primarily to support "set_split_hook" *)
+(** An impure interface FIXME do we need this? *)
 module type PARTITION = sig
   type k
   type r
@@ -26,9 +28,11 @@ module type PARTITION = sig
   val of_list        : (k * r) list -> t
   val length         : t -> int
 
-  val set_split_hook : t -> (unit -> unit) -> unit
+  (* val set_split_hook : t -> (unit -> unit) -> unit *)
 
+(*
   val write          : t -> out_channel -> unit
   val read           : in_channel -> t
+*)
 end
 

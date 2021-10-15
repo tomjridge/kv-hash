@@ -56,9 +56,7 @@ module Make(Nv_map_ss:Nv_map_ss_private.S2) = struct
         (* Partition changed; use gen as the new partition filename *)
         warn(fun () -> "Merge_process: partition changed");
         let fn = Util.part_fn gen in
-        let oc = open_out fn in
-        Partition_ii.write partition oc;
-        close_out_noerr oc;
+        Partition_ii.write_fn partition ~fn;
         ()
     end;    
     let t2 = Unix.time () in

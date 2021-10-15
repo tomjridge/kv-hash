@@ -164,9 +164,7 @@ module Make_1(Config:CONFIG) = struct
 
   (* FIXME this can just be with partition, no? since partition is mutable anyway *)
   let reload_partition t ~fn =     
-    let ic = open_in_bin fn in
-    let partition = Prt.read ic in
-    close_in_noerr ic;
+    let partition = Prt.read_fn ~fn in
     let max_r = 
       Partition_.to_list partition |> fun krs -> 
       krs |> List.map snd |> List.fold_left max 0

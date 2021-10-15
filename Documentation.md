@@ -151,10 +151,18 @@ A B-tree is the obvious solution. However, B-tree code can be somewhat complex. 
 
 The partition ensures that we can lookup an (int) key with at most 1 disk read. Similarly we need at most 1 disk read and 1 disk write to update an (int) key with an (int) value.
 
-The partition is implemented as a binary search tree, from int to int. For 1M kvs, each leaf perhaps takes up 3 ints worth, ie 24 bytes. So, the entire partition consumes of the order of 24MB for the leaves, and perhaps the same again for the internal nodes, 48MB in total. This amount scales linearly. For 10M it is 480MB. For 100M it is 4.8GB. For 10M kvs, 480MB is significant to reload when the partition changes. For 100M kvs, 4.8GB is a significant amount of main memory to have to maintain.
+The partition is implemented as a binary search tree, from int to int. For 1M partition-kvs (corresponding to 1M buckets, or roughly 200M real kvs stored in the buckets), each leaf perhaps takes up 3 ints worth, ie 24 bytes. So, the entire partition consumes of the order of 24MB for the leaves, and perhaps the same again for the internal nodes, 48MB in total. This amount scales linearly. 
 
-Around 10M kvs loading a partition becomes a slightly lengthy process. We can ameliorate the partition reload by writing partition updates rather than the full partition. 
+| Partition-kvs | Real kvs (200 * partition-kvs) | Partition size |
+| ------------- | ------------------------------ | -------------- |
+| 1M            | 200M                           | 48MB           |
+| 10M           | 2B                             | 480MB          |
+| 100M          | 20B                            | 4.8GB          |
 
-For 100M kvs we need to have gigabytes of memory to hold the partition. A desktop machine might have 16GB of memory, so 100M kvs is not problematic. For 400M kvs, desktop machines will struggle. For 1B kvs, we need about 48GB to store the partition. So this is really the domain of server machines.
+For 2B real kvs, 480MB is significant to reload when the partition changes. For 20B real kvs, 4.8GB is a significant amount of main memory to have to maintain.
+
+Around 10M partition-kvs loading a partition becomes a slightly lengthy process. We can ameliorate the partition reload by writing partition updates rather than the full partition. 
+
+For 100M partition-kvs (20B real kvs) we need to have 4.8GB of memory to hold the partition. A desktop machine might have 16GB of memory, so this is not problematic. For 400M partition-kvs (80B real kvs), desktop machines will struggle. For 1B partition-kvs (200B real kvs), we need about 48GB to store the partition. So this is really the domain of server machines.
 
 Anyway, at this point we should probably replace the partition by a bona-fide B-tree. However, unless we keep the B-tree nodes in memory (and consuming 48GB), performance will suffer since we need multiple disk reads (for example) to locate an (int) key. However, assuming we keep all but the leaf nodes and their parents in main memory, we should be able to handle huge numbers of kvs with a B-tree, with at most 2 reads from storage to locate an (int) key. 

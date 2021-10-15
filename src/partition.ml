@@ -104,11 +104,13 @@ module Make_1(S:S) : PURE_PARTITION with type k=S.k and type r=S.r
 
   let length t = Map.length t
 
+(*
   (* FIXME prefer bin_prot for persistence *)
   let write t oc = output_value oc (to_list t)
 
   let read ic = input_value ic |> of_list
-
+*)
+      
 end
 
 
@@ -142,16 +144,17 @@ module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r
     t.split_hook ();
     ()
 
-  let set_split_hook t f = t.split_hook <- f
+  (* let set_split_hook t f = t.split_hook <- f *)
 
   let length t = Pure.length t.partition
-
+(*
   (* FIXME prefer bin_prot for persistence *)
   let write t oc = Pure.write t.partition oc
 
   let read ic = 
     Pure.read ic |> fun p -> 
     { partition=p;split_hook }
+*)
 end
 
 module Make_partition = Make_2
@@ -170,5 +173,39 @@ module Partition_ii = struct
   module Partition = Make_partition(S)
 
   include Partition
+
+
+  (** Some I/O functions *)
+
+  (* NOTE there were some segfaults using output_value on the map
+     itself, so here we take a more cautious approach: we use
+     output_value for small items, and we ensure tail recursion *)
+  let write_fn t ~fn =
+    let oc = Stdlib.open_out_bin fn in
+    let kvs = t |> to_list in
+    begin
+      kvs |> iter_k (fun ~k:kont kvs -> 
+          match kvs with
+          | [] -> ()
+          | (k,v)::kvs -> 
+            Stdlib.output_value oc (k,v);
+            kont kvs)
+    end |> fun () -> 
+    Stdlib.close_out_noerr oc;
+    ()
+
+  let read_fn ~fn =
+    let ic = Stdlib.open_in_bin fn in
+    begin
+      ([]:(int*int)list) |> iter_k (fun ~k:kont xs -> 
+          (try 
+             Stdlib.input_value ic |> fun (k,v) -> 
+             Some (k,v)
+           with End_of_file -> None) |> function
+          | None -> xs
+          | Some (k,v) -> kont ((k,v)::xs))
+    end |> fun kvs -> 
+    Stdlib.close_in_noerr ic;
+    of_list kvs            
 
 end
