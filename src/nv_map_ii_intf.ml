@@ -9,13 +9,13 @@ type export_t = {
 
 (** "General" signature, with k and r free; we actually use this
    signature with k=int and r=int *)
-module type S_kr = sig
+module type S_kv = sig
 
-  module Rawb : BUCKET
+  type raw_bucket
 
   type t
   type k
-  type r
+  type v
 
   (** Create with initial number of partitions *)
   val create_n : buckets_fn:string -> n:int -> t
@@ -24,9 +24,9 @@ module type S_kr = sig
 
   val close : t -> unit
 
-  val insert : t -> k -> r -> unit
+  val insert : t -> k -> v -> unit
 
-  val find_opt : t -> k -> r option
+  val find_opt : t -> k -> v option
 
   (** Private operation to reload a partition after concurrent
      modification of store by another process FIXME remove this - we
@@ -47,8 +47,8 @@ module type S_kr = sig
 
   val show_bucket : t -> k -> unit
 
-  val get_bucket : t -> k -> Rawb.bucket
+  val get_bucket : t -> k -> raw_bucket
   
 end
 
-module type S = S_kr with type k=int and type r=int
+module type S = S_kv with type k=int and type v=int

@@ -1,11 +1,11 @@
 (** Test 4, create a map with lots of entries then test the batch performance *)
 
 open Kv_hash
-open Util
+open Private.Util
 
 let time () = Unix.time ()
 
-module Kv = Kv_hash.Nv_map_ss
+module Kv = Kv_hash.Nv_map_ss0
 
 let initial_inserts = 1_000_000
 

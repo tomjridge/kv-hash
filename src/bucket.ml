@@ -4,7 +4,11 @@ open Bucket_intf
 
 
 module Make_1(C:BUCKET_CONFIG) = struct
-
+  
+  open struct
+    type k = int
+    type v = int
+  end
 
   (* NOTE for crash-resilience a partition should be block aligned and
      block sized, and the code should work independent of the order of
@@ -22,6 +26,10 @@ k,v are sorted; k',v' are unsorted
 
   *)
 
+
+  (* FIXME perhaps avoid all the merging of unsorted etc by creating a
+     map and checking the length of that *)
+
   include C 
 
   let used_ints = 
@@ -32,7 +40,7 @@ k,v are sorted; k',v' are unsorted
 
   (* let bucket_size_bytes = bucket_size_ints * Bigarray.kind_size_in_bytes Bigarray.int *)
       
-  let _ = assert(used_ints <= C.len)
+  let _ = assert(used_ints <= C.bucket_length_in_ints)
 
   let _ = assert(max_sorted >= max_unsorted)
 
@@ -52,27 +60,19 @@ k,v are sorted; k',v' are unsorted
 
   type t = bucket
 
-  let create_empty ?(arr=Bigarray.(Array1.create Int C_layout len )) ()  = 
-    arr.{Ptr.len_sorted} <- 0;
-    arr.{Ptr.len_unsorted} <- 0;
-    assert(Array1.dim arr = len);
-    {
-      arr;
-      sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
-      unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
-    }  
+  let to_bigarray bucket = bucket.arr
 
-  (** Assumes the arr is correctly formed *)
-  let create_nonempty arr = 
-    assert(Array1.dim arr = len);
+  (* FIXME should we do further checks here? eg that sorted really are
+     sorted? that the elts are within a given range? *)
+  let of_bigarray ba = 
+    assert(ba.{Ptr.len_sorted} <= max_sorted);
+    assert(ba.{Ptr.len_unsorted} <= max_unsorted);
     {
-      arr;
-      sorted = Bigarray.Array1.sub arr Ptr.sorted_start (2*max_sorted);
-      unsorted = Bigarray.Array1.sub arr Ptr.unsorted_start (2*max_unsorted);
-    }  
+      arr=ba;
+      sorted=Array1.sub ba Ptr.sorted_start (2*max_sorted);
+      unsorted=Array1.sub ba Ptr.unsorted_start (2*max_unsorted);
+    }    
     
-
-  let get_data bucket = bucket.arr
 
   module With_bucket(S:sig val bucket : bucket end) = struct
     open S
@@ -126,19 +126,17 @@ k,v are sorted; k',v' are unsorted
 
     (* NOTE need to remove duplicates *)
 
-    module Map = Map.Make(Int)
-
     (* convert to sorted array; include some additional elts xs *)
     let unsorted_to_sorted xs = 
       let len = len_unsorted () in
-      let m = Map.of_seq (List.to_seq xs) in
+      let m = Map_i.of_seq (List.to_seq xs) in
       (0,m) |> iter_k (fun ~k:kont (i,m) -> 
           match i < len with
           | false -> m
           | true -> 
-            Map.add (U.ks i) (U.vs i) m |> fun m -> 
+            Map_i.add (U.ks i) (U.vs i) m |> fun m -> 
             kont (i+1,m)) |> fun m -> 
-      Map.to_seq m |> fun seq -> 
+      Map_i.to_seq m |> fun seq -> 
       Array.of_seq seq     
 
     (** merge unsorted into sorted; NOTE assumes there is enough space to insert *)
@@ -186,72 +184,44 @@ k,v are sorted; k',v' are unsorted
         partition, then return with the new partitions (and note that
         we need to GC/recycle the old partition at some point) *)
 
-    (** The kv parameter is an extra key-value that we need to add
-        to the split. NOTE alloc returns a new *clean* bucket
-        (lengths are 0 etc) *)
-    let split_with_addition kv = 
+    let sorted_to_map () = 
+      let len = len_sorted () in
+      (Map_i.empty,0) |> iter_k (fun ~k:kont (m,i) -> 
+          match i < len with
+          | true -> kont (Map_i.add (S.ks i) (S.vs i) m, i+1)
+          | false -> m)
+
+    (* m is an initial map - typically the result of sorted_to_map *)
+    let unsorted_to_map m = 
+       let len = len_unsorted () in
+       (m,0) |> iter_k (fun ~k:kont (m,i) -> 
+          match i < len with
+          | true -> kont (Map_i.add (U.ks i) (U.vs i) m, i+1)
+          | false -> m)      
+
+    (** The kv parameter is an extra key-value that we need to add to
+       the split. Return value is a triple (kvs1,k,kvs2) where kvs1 <
+       k <= kvs2, and |kvs1|,|kvs2| < max_sorted, and kvs1 and kvs2
+       are sorted i.e. safe to construct a new bucket for kvs1 and
+       kvs2, separated by k *)
+    let split_with_addition (k,v) = 
       trace (fun () -> "split_with_addition");
-      let p1,p2 = create_empty(),create_empty() in
-      (* check clean partitions *)
-      assert(p1.arr.{ Ptr.len_sorted } = 0
-             && p1.arr.{ Ptr.len_unsorted } = 0);
-      assert(p2.arr.{ Ptr.len_sorted } = 0
-             && p2.arr.{ Ptr.len_unsorted } = 0);
-      (* assert(p1.len = p.len && p2.len = p.len); *)
       let len1 = len_sorted () in
       let len2 = len_unsorted () in
       assert(not (len1 + len2 <= max_sorted));
-      (* copy unsorted into an array (including kv), and sort *)
-      let kvs2 = unsorted_to_sorted [kv] in
-      (* FIXME may need another len2 here, in case of duplicates, and
-         we also added a new elt *)
-      let len2 = Array.length kvs2 in
-      (* now merge directly into p1.sorted and p2.sorted; roughly
-         half in p1, half in p2 (p1 may duplicate some old entries
-         that get overridden by entries in p2) *)
-      let cut_point = (len1+len2+1) / 2 in
-      let ks1 i = S.ks i in
-      let vs1 i = S.vs i in
-      let ks2 i = kvs2.(i) |> fst in
-      let vs2 i = kvs2.(i) |> snd in
-      let count = ref 0 in
-      let set i k v = 
-        match !count < cut_point with
-        | true -> 
-          (* fill p1 *)
-          p1.arr.{ Ptr.sorted_start + 2*i } <- k;
-          p1.arr.{ Ptr.sorted_start + 2*i +1} <- v;
-          incr count;
-          ()
-        | false -> 
-          (* fill p2 *)
-          let i = i - cut_point in
-          p2.arr.{ Ptr.sorted_start + 2*i } <- k;
-          p2.arr.{ Ptr.sorted_start + 2*i +1} <- v;
-          (* no need to incr count *)
-          ()
-      in
-      merge 
-        ~ks1 ~vs1 ~len1
-        ~ks2 ~vs2 ~len2
-        ~set
-        () |> fun n -> 
-      p1.arr.{ Ptr.len_sorted } <- cut_point;
-      assert(len1 + len2 <= 2*len1); (* FIXME logic *)
-      assert(
-        n-cut_point>0 || begin
-          Printf.printf "%d %d %d %d\n%!" len1 len2 cut_point n;
-          false
-        end
-      ); 
-      (* FIXME are we sure this is the case? yes, if cut_point <
-         original sorted length; why is this the case? need l1+l2 <
-         2*l1, which should be the case if l2 small compared to l1
-      *)
-      p2.arr.{ Ptr.len_sorted } <- n - cut_point;
-      (* get lowest key in p2 *)
-      let k2 = p2.arr.{ Ptr.sorted_start } in
-      (p1,k2,p2)
+      sorted_to_map () |> fun m1 -> 
+      unsorted_to_map m1 |> fun m2 -> 
+      Map_i.add k v m2 |> fun m3 -> 
+      (* now split those less than k, and those >= k *)
+      let len = Map_i.cardinal m3 in
+      Map_i.bindings m3 |> fun kvs -> 
+      Base.List.split_n kvs (len/2) |> fun (kvs1,kvs2) -> 
+      match kvs2 with
+      | [] -> failwith "split_with_addition" (* FIXME *)
+      | (k,_v)::_ -> 
+        assert(List.length kvs1 < max_sorted); (* FIXME? *)
+        assert(List.length kvs2 < max_sorted); (* FIXME? *)
+        (kvs1,k,kvs2)
 
     let add k v = 
       trace(fun () -> "bucket.add");
@@ -282,6 +252,18 @@ k,v are sorted; k',v' are unsorted
           split_with_addition (k,v) |> fun (p1,k,p2) -> 
           `Split(p1,k,p2)
 
+    (* initialize a new bucket from a sorted list of kvs *)
+    let init_sorted kvs = 
+      let len = List.length kvs in
+      assert(len <= max_sorted);
+      assert(len_unsorted() = 0);
+      assert(len_sorted() = 0);
+      kvs |> List.iteri (fun i (k,v) -> 
+          sorted.{2*i} <- k;
+          sorted.{2*i +1} <- v);
+      set_len_sorted len;
+      ()
+
     let export () = 
       trace(fun () -> "bucket.export");
       let len1 = len_sorted () in
@@ -302,13 +284,19 @@ k,v are sorted; k',v' are unsorted
 
   let _ : 
 bucket ->
-int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
+int -> int -> [ `Ok | `Split of (k*v)list * k * (k*v)list ] = insert
 
   let find bucket k = 
     let open With_bucket(struct let bucket=bucket end) in
     find k
 
   let _ : bucket -> int -> int option = find
+
+
+  let init_sorted bucket kvs =
+    let open With_bucket(struct let bucket=bucket end) in
+    init_sorted kvs    
+
 
   let export bucket = 
     let open With_bucket(struct let bucket=bucket end) in
@@ -361,6 +349,8 @@ int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
           | true -> k (Map_i.add unsorted.{i} unsorted.{i+1} m, i+2)
           | false -> m) |> fun m -> 
       m
+
+    let kvs_to_map kvs = Map_i.of_seq (List.to_seq kvs)
       
     let insert bucket k v = 
       let m1 = to_map bucket in
@@ -371,8 +361,8 @@ int -> int -> [ `Ok | `Split of bucket * int * bucket ] = insert
         assert(Map_i.add k v m1 |> Map_i.equal Int.equal m2);
         r
       | `Split(b1,_k,b2) -> 
-        let m21 = to_map b1 in
-        let m22 = to_map b2 in
+        let m21 = kvs_to_map b1 in
+        let m22 = kvs_to_map b2 in
         begin (* check separated *)
           Map_i.max_binding_opt m21 |> function
           | None -> ()
@@ -401,3 +391,14 @@ end (* Make_1 *)
 module Make_2(C:BUCKET_CONFIG) : BUCKET = Make_1(C)
 
 module Make = Make_2
+
+(** Standard bucket; other buckets may be used for testing *)
+module Bucket0 = struct
+  module Config_ = struct
+    let max_sorted = Config.config.bucket_sorted
+    let max_unsorted = Config.config.bucket_unsorted
+    let bucket_length_in_ints = Config.config.blk_sz / int_sz_bytes
+  end
+
+  include Make(Config_)
+end

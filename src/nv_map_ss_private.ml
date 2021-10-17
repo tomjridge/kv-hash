@@ -26,8 +26,9 @@ may be substantial overhead in the values file.
 *)
 
 open Util
+open Bucket_intf
 
-module Cache = Cache_2gen
+(* module Cache = Cache_2gen *)
   
 let hash (s:string) = 
   let h = XXHash.XXH64.hash s |> Int64.to_int in
@@ -45,16 +46,18 @@ type 'int_map t = {
   (* NOTE mutable because RO instances need to sync this from disk
      after a merge *)
 
-  cache: (string,string) Cache_2gen.t;
+  (* cache: (string,string) Cache_2gen.t; *)
 
   debug: (string,string) Hashtbl.t; (* All entries, for debugging only *)
 }
 
 
-(** What we need from the large [int->int] Nv_map_ii_intf.S map *)
-module type S1 = Nv_map_ii_intf.S
-
-module Make_1(Nv_map_ii_:S1) = struct
+module Make_1(S0:sig
+    type raw_bucket
+    module Raw_bucket:BUCKET with type t=raw_bucket
+    module Nv_map_ii_:Nv_map_ii_intf.S with type raw_bucket=raw_bucket
+  end) = struct
+  open S0
 
   (** Basic implementation, no cache, no debug *)
   module Basic = struct
@@ -114,6 +117,7 @@ module Make_1(Nv_map_ii_:S1) = struct
       Nv_map_ii_.t t -> (string * [`Delete | `Insert of string ]) list -> unit
   end
 
+(*
   module With_cache(S:S) : S = struct
     open S
     let _ = Printf.printf "%s: using cached phash\n%!" __MODULE__
@@ -144,9 +148,10 @@ module Make_1(Nv_map_ii_:S1) = struct
       Cache.maybe_trim t.cache ~young_sz:const_1M ~old_sz:const_1M;
       ()
   end
+*)
 
-  module With_debug(S:S) = struct
-    open S
+  module With_debug(S1:S) = struct
+    open S1
 
     let find_opt t k =
       find_opt t k |> fun r -> 
@@ -162,8 +167,8 @@ module Make_1(Nv_map_ii_:S1) = struct
             __MODULE__;
           (* Nv_map_ii_.show_bucket t.nv_int_map (hash k); *)
           let bucket = Nv_map_ii_.get_bucket t.nv_int_map (hash k) in
-          Nv_map_ii_.Rawb.show bucket;
-          begin match Nv_map_ii_.Rawb.find bucket (hash k) with
+          Raw_bucket.show bucket;
+          begin match Raw_bucket.find bucket (hash k) with
             | None -> ()
             | Some off -> 
               let s : string = Values_file.read_value t.values ~off in
@@ -207,32 +212,28 @@ To create given filename fn:
 - create the values map on fn.values
 
 *)
-module Make_2 = struct
+module Make_2(Raw_bucket:BUCKET) = struct
 
-  module Config_ = struct
-    (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
-       sorted; 255 kvs for unsorted and sorted *)
+  module Raw_bucket = Raw_bucket
 
-    let max_unsorted = Config.config.bucket_unsorted
-    let max_sorted = Config.config.bucket_sorted
-    let blk_sz = Config.config.blk_sz
-  end
+  module Bucket_store_ = Bucket_store.Make(Raw_bucket)
 
-  module Nv_map_ii_ = Nv_map_ii.Make_2(Config_)
+  module Nv_map_ii_ = Nv_map_ii.Make_1(Raw_bucket)(Bucket_store_)
 
-  module Made_1 = Make_1(Nv_map_ii_)
+  module Made_1 = Make_1(struct
+      type raw_bucket=Raw_bucket.t
+      module Raw_bucket=Raw_bucket
+      module Nv_map_ii_=Nv_map_ii_
+    end)
 
   let create 
       ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
       ?values_fn:(values_fn=Config.config.values_fn)
       () = 
-    trace(fun () -> Printf.sprintf "%s: start\n" __FUNCTION__);
     Nv_map_ii_.create ~buckets_fn |> fun nv_int_map -> 
     let values = Values_file.create ~fn:values_fn in
-    trace(fun () -> Printf.sprintf "%s: end\n" __FUNCTION__);
     { values; 
       nv_int_map; 
-      cache=Cache_2gen.create ~young_sz:const_1M ~old_sz:const_1M; 
       debug=Hashtbl.create 1 }
 
   let batch_update_debug _t _ops = () (* FIXME for debug version, comment this line *)
@@ -253,6 +254,13 @@ module Make_2 = struct
   let get_values_file t = t.values
 end
 
+(** NOTE prefer Make_2 since it provides the Nv_map_ii_ functions *)
+module Make_3(Raw_bucket:BUCKET) : Nv_map_ss_intf.S = Make_2(Raw_bucket)
+
+
+module Nv_map_ss0 = Make_2(Bucket.Bucket0)
+
+(*
 (** Add an extra function we need; expose Nv_map_ii_ submodule *)
 module type S2 = sig
 
@@ -265,4 +273,4 @@ end
 
 
 module Make_3 : S2 = Make_2
-
+*)

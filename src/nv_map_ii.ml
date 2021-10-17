@@ -4,68 +4,28 @@
 
 open Util
 open Bucket_intf
+open Bucket_store_intf
 open Nv_map_ii_intf
 
 module Partition_ = Partition.Partition_ii
 
+module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucket=Raw_bucket.t) = struct
 
-module type CONFIG = sig
-  val max_sorted:int
-  val max_unsorted:int
-  val blk_sz : int (* in bytes *)
-end
-
-module Make_1(Config_:CONFIG) = struct
-
-  open Config_
-  let blk_sz = Config_.blk_sz
-
-  module Bucket_config = struct
-    include Config_
-    let len = blk_sz / Bigarray.(kind_size_in_bytes Int)
-  end
-
-  (* Raw bucket *)
-  module Rawb' = Bucket.Make(Bucket_config)
-  (* Add debugging at runtime; FIXME expensive? prefer simple module expression? *)
-  let rawb = Config.config.debug_bucket |> function
-    | false -> (module Rawb' : BUCKET with type t = Rawb'.t)
-    | true -> (module (struct
-                include Rawb'
-                include Rawb'.With_debug()
-              end))
-  module Rawb = (val rawb)
-
-  type bucket = { blk_i:int; rawb: Rawb.t }
-
-  let ints_per_block = blk_sz / Bigarray.kind_size_in_bytes Bigarray.int
-
-  let _ = trace (fun () ->  
-      let open Sexplib.Std in
-      Sexplib.Sexp.to_string_hum 
-        [%message "Config_"
-            ~blk_sz:(blk_sz : int)
-            ~ints_per_block:(ints_per_block : int)
-            ~max_sorted:(max_sorted : int)
-            ~max_unsorted:(max_unsorted : int)
-            (* ~bucket_size_ints:(Bucket_.bucket_size_ints : int) *)
-            (* ~bucket_size_bytes:(Bucket_.bucket_size_bytes : int) *)
-        ])      
+  type raw_bucket = Bucket_store.raw_bucket
 
   type k = int
-  type r = int
+  type v = int
 
   (** Create an initial n-way partition, with values provided by alloc *)
   let initial_partitioning ~alloc ~n = 
-    let delta = Int.max_int / n in
-    Base.List.range ~stride:delta ~start:`inclusive ~stop:`inclusive 0 ((n-1)*delta) |> fun ks -> 
+    let stride = Int.max_int / n in
+    Base.List.range ~stride ~start:`inclusive ~stop:`inclusive 0 ((n-1)*stride) |> fun ks -> 
     ks |> List.map (fun x -> x,alloc ()) |> fun krs -> 
     Partition_.of_list krs
 
   (* Runtime handle *)
   type t = {
-    buckets_fn        : string; (* filename *)
-    fd                : Unix.file_descr;
+    bucket_store      : Bucket_store.t;
     alloc_counter     : int ref;
     alloc             : unit -> int;
     mutable partition : Partition_.t; (* NOTE mutable *)
@@ -74,11 +34,7 @@ module Make_1(Config_:CONFIG) = struct
 
   (* create with an initial partition *)
   let create_p ~buckets_fn ~partition = 
-    (* Bigstring_unix requires fd to be non-blocking for pwrite *)
-    Core.Unix.(openfile ~mode:[O_CREAT;O_RDWR; O_TRUNC;O_NONBLOCK] buckets_fn) |> fun fd -> 
-    Unix.ftruncate fd (Config.config.initial_bucket_store_size);
-    (* let data = Mmap.of_fd fd Bigarray.int in *)
-    (* keep block 0 for header etc *)
+    let bucket_store = Bucket_store.create ~fn:buckets_fn () in
     let max_r = partition |> Partition_.to_list |> List.map snd |> List.fold_left max 1 in
     let alloc_counter = ref (1+max_r) in
     let alloc () = 
@@ -86,7 +42,7 @@ module Make_1(Config_:CONFIG) = struct
       incr alloc_counter;
       r
     in
-    { buckets_fn; fd; alloc_counter; alloc; partition }
+    { bucket_store; alloc_counter; alloc; partition }
 
   let create_n ~buckets_fn ~n =
     let alloc_counter = ref 1 in
@@ -103,27 +59,12 @@ module Make_1(Config_:CONFIG) = struct
     create_n ~buckets_fn ~n
 
   let close t = 
-    Unix.close t.fd;
+    Bucket_store.close t.bucket_store;
     (* FIXME sync partition for reopen *)
     ()
 
   let open_ ~fn:_ ~n:_ = failwith "FIXME persistent_hashtable.ml: open_"
 
-
-  (** {2 Bucket util} *)
-
-  let sync_bucket t (b:bucket) : unit = 
-    write_int_ba ~fd:t.fd ~off:(b.blk_i * blk_sz) (Rawb.get_data b.rawb)
-
-  let create_bucket t ~blk_i = 
-    let rawb = Rawb.create_empty () in
-    let b = { blk_i; rawb } in
-    sync_bucket t b;
-    b
-
-  let read_bucket t ~blk_i = 
-    let arr = read_int_ba ~fd:t.fd ~blk_sz ~off:(blk_sz * blk_i) in    
-    { blk_i; rawb=Rawb.create_nonempty arr }
 
   (* we have the potential for confusion if we read a bucket twice
      into different arrays; this should only happen for concurrent
@@ -132,9 +73,8 @@ module Make_1(Config_:CONFIG) = struct
   let find_bucket t k = 
     Partition_.find t.partition k |> fun (k,blk_i) -> 
     (* blk_i is the blk index within the store *)
-    let bucket = read_bucket t ~blk_i in
+    let bucket = Bucket_store.read_bucket t.bucket_store blk_i in
     k,bucket
-
 
 
   
@@ -145,20 +85,23 @@ module Make_1(Config_:CONFIG) = struct
     trace(fun () -> Printf.sprintf "insert: inserting %d %d\n%!" k v);
     (* find bucket *)
     let k1,bucket = find_bucket t k in
-    Rawb.insert bucket.rawb k v |> function
-    | `Ok -> sync_bucket t bucket
-    | `Split(b1,k2,b2) -> 
-      let r1,r2 = t.alloc(),t.alloc() in      
-      let b1,b2 = {blk_i=r1;rawb=b1 },{blk_i=r2;rawb=b2} in
-      trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
+    Raw_bucket.insert bucket.raw_bucket k v |> function
+    | `Ok -> Bucket_store.write_bucket t.bucket_store bucket
+    | `Split(kvs1,k2,kvs2) -> 
+      let r1,r2 = t.alloc(),t.alloc() in 
+      let b1 = Bucket_store.read_bucket t.bucket_store r1 in
+      Raw_bucket.init_sorted b1.raw_bucket kvs1;
+      let b2 = Bucket_store.read_bucket t.bucket_store r2 in
+      Raw_bucket.init_sorted b2.raw_bucket kvs2;
       Partition_.split t.partition ~k1 ~r1 ~k2 ~r2;
-      sync_bucket t b1;
-      sync_bucket t b2;
+      Bucket_store.write_bucket t.bucket_store b1;
+      Bucket_store.write_bucket t.bucket_store b2;
+      trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
       ()  
     
   let find_opt t k = 
     let _,bucket = find_bucket t k in
-    Rawb.find bucket.rawb k
+    Raw_bucket.find bucket.raw_bucket k
 
   let delete _t _k = failwith "FIXME partition.ml: delete"
 
@@ -180,7 +123,8 @@ module Make_1(Config_:CONFIG) = struct
   let export t = 
     Partition_.to_list t.partition |> fun krs -> 
     krs |> List.map (fun (k,_) -> 
-        find_bucket t k |> function (_,b) -> Rawb.export b.rawb) |> fun buckets -> 
+        find_bucket t k |> function (_,b) -> Raw_bucket.export b.raw_bucket) 
+    |> fun buckets -> 
     {partition=krs;buckets}
 
   let _ : t -> export_t = export
@@ -199,17 +143,28 @@ module Make_1(Config_:CONFIG) = struct
   let get_partition t = t.partition
 
   let show_bucket t k = 
-    find_bucket t k |> fun (_,b) -> Rawb.show b.rawb
+    find_bucket t k |> fun (_,b) -> Raw_bucket.show b.raw_bucket
 
-  let get_bucket t k = find_bucket t k |> fun (_,b) -> b.rawb
+  let get_bucket t k = find_bucket t k |> fun (_,b) -> b.raw_bucket
     
-end (* Make *)
+end (* Make_1 *)
 
-module Make_2(Config_:CONFIG) : Nv_map_ii_intf.S = Make_1(Config_)
+module Make_2 : functor 
+  (Raw_bucket:BUCKET) 
+  (Bucket_store : BUCKET_STORE with type raw_bucket=Raw_bucket.t) 
+  -> Nv_map_ii_intf.S with type raw_bucket=Raw_bucket.t 
+  = Make_1
 
+module Make = Make_2
+
+(** Standard instance *)
+module Nv_map_ii0 = Make_1(Bucket.Bucket0)(Bucket_store.Bucket_store0)
 
 module Test() = struct
-  
+
+(* FIXME 
+  open Make_1
+
   module Config_ = struct
     let max_sorted = 2
     let max_unsorted = 1
@@ -217,8 +172,6 @@ module Test() = struct
 
   end
 
-  module M = Make_1(Config_)
-  open M
 
   let init_partition = [(0,1);(20,2);(40,3);(60,4);(80,5);(100,5)] |> Partition_.of_list
 
@@ -265,12 +218,15 @@ module Test() = struct
   let _ = show t
 *)
 
+*)
+
 end
 
 
 
 module Test2() = struct
 
+(* FIXME
   module Config_ = struct
     (* 4096 blk_sz; 512 ints in total; 510 ints for unsorted and
        sorted; 255 kvs for unsorted and sorted *)
@@ -308,5 +264,7 @@ real	0m1.812s
 user	0m1.354s
 sys	0m0.318s
 *)
+*)
 
 end
+

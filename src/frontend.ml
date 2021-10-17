@@ -17,9 +17,12 @@ Sequence of events:
 
 open Util
 
-module Nv_map_ss_ = Nv_map_ss_private.Make_2
+module Nv_map_ss_ = Nv_map_ss_private.Make_2(Bucket.Bucket0)
 
-module Merge_process_ = Merge_process.Make(Nv_map_ss_)
+module Merge_process_ = Merge_process.Make(struct
+    module Nv_map_ii_ = Nv_map_ss_.Nv_map_ii_
+    module Nv_map_ss_ = Nv_map_ss_
+  end)
 
 module KV = struct
   open Bin_prot.Std

@@ -1,6 +1,6 @@
 (** Test of fork with shared mmap *)
 
-open Kv_hash.Util
+open Kv_hash.Private.Util
 
 let trace (_f:unit -> string) = ()
 

@@ -1,11 +1,11 @@
 (** Test the string->string map *)
 
 open Kv_hash
-open Util
+open Private.Util
 
 let time () = Unix.time ()
 
-module Kv = Kv_hash.Nv_map_ss
+module Kv = Kv_hash.Nv_map_ss0
 
 let lim = 1_000_000
 
