@@ -36,29 +36,31 @@ module Op = struct
 end    
 open Op
 
-(* Version using out_channel 
+(* Version using out_channel *)
 module Log_file_w = struct
 
   type t = {
     oc: Stdlib.out_channel;
-    max_log_len: int
+    max_sz: int
   }
 
-  let create ~fn ~max_log_len = {
+  let create ~fn ~max_sz = {
     oc=open_out_bin fn;
-    max_log_len;
+    max_sz;
   }
     
-  (* soft limit *)
-  let can_write t = pos_out t.oc < t.max_log_len
-
-  let write t op = output_value t.oc op
+  let write t op = 
+    match Stdlib.pos_out t.oc > t.max_sz with
+    | true -> `Buffer_short
+    | false -> (
+        output_value t.oc op;
+        `Ok)
 
   let close t = close_out_noerr t.oc
 
 end
-*)
 
+(* Version using mmap
 module Log_file_w = struct
   type t = {
     fn          :string;
@@ -96,7 +98,7 @@ module Log_file_w = struct
     t.pos <- -1;
     ()
 end
-
+*)
 
 module Log_file_r = struct
 

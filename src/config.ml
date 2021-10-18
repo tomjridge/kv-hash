@@ -42,7 +42,7 @@ type config = {
 
 let default_config = { 
   initial_bucket_store_size    = const_4GB;
-  initial_number_of_partitions = 10_000;
+  initial_number_of_partitions = 100_000; (* 10M for stress testing *)
   max_log_length               = 128 * const_1MiB;
   lru_capacity                 = 100_000;
   debug_bucket                 = false;

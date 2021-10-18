@@ -204,7 +204,6 @@ let part_fn gen = "part_"^(string_of_int gen)
 
 
 
-(*
 (* t1 and t2 are ctypes kinds; t2_kind is a normal bigarray kind *)
 let coerce_bigarray1 t1 t2 t2_kind arr = 
   Ctypes.bigarray_start Ctypes.array1 arr |> fun (pi:'t1 Ctypes.ptr) -> 
@@ -215,9 +214,7 @@ let coerce_bigarray1 t1 t2 t2_kind arr =
     t2_kind
     pc |> fun arr -> 
   arr
-*)
 
-(*
 let write_int_ba ~fd ~off (data:int_ba_t) = 
   let arr_c = coerce_bigarray1 Ctypes.camlint Ctypes.char Bigarray.Char data in
   let len = Bigarray.Array1.dim arr_c in
@@ -230,9 +227,7 @@ let write_int_ba ~fd ~off (data:int_ba_t) =
     arr_c |> fun n_written -> 
   assert(n_written = len);
   ()    
-*)
 
-(*
 let read_int_ba ~blk_sz ~fd ~off = 
   let arr_c = Core.Bigstring.create blk_sz in
   Bigstring_unix.pread_assume_fd_is_nonblocking 
@@ -242,7 +237,6 @@ let read_int_ba ~blk_sz ~fd ~off =
   assert(n_read = blk_sz);
   let arr_i = coerce_bigarray1 Ctypes.char Ctypes.camlint Bigarray.Int arr_c in
   arr_i
-*)
 
 
 let sorted_int_ba arr = 

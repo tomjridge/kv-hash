@@ -7,7 +7,8 @@ open Bucket_store_intf
 
 (* FIXME add debugging back in - see old *)
 
-module Make_1(Raw_bucket: BUCKET) = struct
+(** Version with mmap *)
+module Make_with_mmap(Raw_bucket: BUCKET) = struct
   type raw_bucket = Raw_bucket.t
 
   type t = {
@@ -57,8 +58,69 @@ module Make_1(Raw_bucket: BUCKET) = struct
 
 end
 
+module Private_mmap = struct
+  module Make(Raw_bucket:BUCKET) : BUCKET_STORE with type raw_bucket=Raw_bucket.t 
+    = Make_with_mmap(Raw_bucket)
+
+  (** Standard instance; other instances for testing *)
+  module Bucket_store0 = Make_with_mmap(Bucket.Bucket0)
+end
+
+module Make_with_fd(Raw_bucket:BUCKET) = struct
+  type raw_bucket = Raw_bucket.t
+
+  type t = {
+    fn             : string;
+    fd             : Unix.file_descr;
+    mutable closed : bool;
+  }
+
+  type bucket = {
+    index:int;
+    raw_bucket: Raw_bucket.t
+  }
+
+  let create ?sz:(sz=1024) ~fn () =
+    Unix.(openfile fn [O_CREAT;O_TRUNC;O_RDWR;O_NONBLOCK] perm0) |> fun fd -> 
+    Unix.(ftruncate fd (sz*Config.config.blk_sz));
+    { fn; fd; closed=false }
+
+  let open_ ~fn = 
+    Unix.(openfile fn [O_CREAT;O_RDWR;O_NONBLOCK] perm0) |> fun fd -> 
+    { fn; fd; closed=false }
+
+  let blk_sz = Config.config.blk_sz
+
+  let read_bucket t i = 
+    assert(not t.closed);
+    let off = i*blk_sz in
+    read_int_ba ~blk_sz ~fd:t.fd ~off |> fun arr ->
+    Raw_bucket.of_bigarray arr |> fun raw_bucket -> 
+    { index=i; raw_bucket }
+
+  let write_bucket t b =     
+    assert(not t.closed);
+    let off = b.index * blk_sz in
+    write_int_ba ~fd:t.fd ~off (Raw_bucket.to_bigarray b.raw_bucket);
+    ()
+
+  let sync t = 
+    assert(not t.closed);
+    Unix.fsync t.fd;
+    ()
+
+  let close t = 
+    assert(not t.closed);
+    sync t;
+    (* Mmap.close t.mmap; (\* closes the underlying fd *\) *)
+    t.closed <- true;
+    ()
+
+end
+
+
 module Make(Raw_bucket:BUCKET) : BUCKET_STORE with type raw_bucket=Raw_bucket.t 
-  = Make_1(Raw_bucket)
+  = Make_with_fd(Raw_bucket)
 
 (** Standard instance; other instances for testing *)
-module Bucket_store0 = Make_1(Bucket.Bucket0)
+module Bucket_store0 = Make_with_fd(Bucket.Bucket0)

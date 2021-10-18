@@ -67,6 +67,7 @@ k,v are sorted; k',v' are unsorted
   let of_bigarray ba = 
     assert(ba.{Ptr.len_sorted} <= max_sorted);
     assert(ba.{Ptr.len_unsorted} <= max_unsorted);
+    assert(Bigarray.Array1.dim ba = bucket_length_in_ints);
     {
       arr=ba;
       sorted=Array1.sub ba Ptr.sorted_start (2*max_sorted);

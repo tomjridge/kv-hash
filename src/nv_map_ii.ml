@@ -20,7 +20,7 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
   let initial_partitioning ~alloc ~n = 
     let stride = Int.max_int / n in
     Base.List.range ~stride ~start:`inclusive ~stop:`inclusive 0 ((n-1)*stride) |> fun ks -> 
-    ks |> List.map (fun x -> x,alloc ()) |> fun krs -> 
+    List.rev ks |> List.rev_map (fun x -> x,alloc ()) |> fun krs -> 
     Partition_.of_list krs
 
   (* Runtime handle *)
@@ -35,7 +35,7 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
   (* create with an initial partition *)
   let create_p ~buckets_fn ~partition = 
     let bucket_store = Bucket_store.create ~fn:buckets_fn () in
-    let max_r = partition |> Partition_.to_list |> List.map snd |> List.fold_left max 1 in
+    let max_r = partition |> Partition_.to_list |> List.rev_map snd |> List.fold_left max 1 in
     let alloc_counter = ref (1+max_r) in
     let alloc () = 
       !alloc_counter |> fun r -> 
@@ -111,7 +111,8 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
     let partition = Partition_.read_fn ~fn in
     let max_r = 
       Partition_.to_list partition |> fun krs -> 
-      krs |> List.map snd |> List.fold_left max 0
+      (* rev_map to avoid stack-overflow/segfault *)
+      krs |> List.rev_map snd |> List.fold_left max 0
     in
     t.alloc_counter := 1+max_r; (* FIXME or max_r? *)
     t.partition <- partition
@@ -122,7 +123,7 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
 
   let export t = 
     Partition_.to_list t.partition |> fun krs -> 
-    krs |> List.map (fun (k,_) -> 
+    List.rev krs |> List.rev_map (fun (k,_) -> 
         find_bucket t k |> function (_,b) -> Raw_bucket.export b.raw_bucket) 
     |> fun buckets -> 
     {partition=krs;buckets}

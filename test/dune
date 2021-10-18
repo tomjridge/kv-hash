@@ -9,6 +9,8 @@
 ; IGNORE test7: unbuffered writes performance
 ; IGNORE test8: bigarray coerce
 ; test9: load partition
+; test10: stress test map_ss (keep inserting kvs forever)
+; test11: stress test frontend
 
 (executable
  (name "test1")
@@ -51,10 +53,20 @@
  (libraries extunix bigstringaf ctypes))
 
 (executable
- (name "test9") ; bigarray kind casting
+ (name "test9") ; load partition
  (modules test9)
+ (libraries kv_hash))
+
+(executable
+ (name "test10") ; stress test map-ss
+ (modules test10)
+ (libraries kv_hash))
+
+(executable
+ (name "test11") ; stress test frontend
+ (modules test11)
  (libraries kv_hash))
 
 (alias
  (name "executables")
- (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe))
+ (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe test10.exe test11.exe))
