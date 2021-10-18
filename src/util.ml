@@ -234,7 +234,8 @@ let read_int_ba ~blk_sz ~fd ~off =
     fd  
     ~offset:off 
     ~pos:0 ~len:blk_sz arr_c |> fun n_read -> 
-  assert(n_read = blk_sz);
+  assert(n_read = 0 || n_read = blk_sz);
+  (if n_read = 0 then Bigarray.Array1.fill arr_c (Char.chr 0));
   let arr_i = coerce_bigarray1 Ctypes.char Ctypes.camlint Bigarray.Int arr_c in
   arr_i
 
