@@ -1,0 +1,3 @@
+(executable
+ (name "main")
+ (libraries kv_hash))

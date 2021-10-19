@@ -8,6 +8,8 @@ NOTE since fds are inherited, this is not safe to use in a
 
 *)
 
+open Util
+
 module type S = 
 sig
   type t 
@@ -22,6 +24,9 @@ sig
   (** close all existing channels and reopen; this is used for child
      processes to avoid concurrency issues arising from file offsets
      and seeking *)
+
+  val list_values: t -> (string * int) list
+  val list_values_seq: t -> (string * int) Seq.t
 end
 
 module Make_1 = struct
@@ -99,6 +104,48 @@ module Make_1 = struct
     t.ch_w <- ch_w;
     t.pos_w <- pos_w;
     ()
+
+  let list_values t =
+    let max_pos = in_channel_length t.ch_r in
+    seek_in t.ch_r 0;
+    [] |> iter_k (fun ~k:kont xs -> 
+        let pos = pos_in t.ch_r in
+        match pos = max_pos with
+        | true -> List.rev xs
+        | false -> 
+          let s : string option = 
+            try Some(input_value t.ch_r) with _ -> None
+          in
+          match s with
+          | None -> 
+            failwith (Printf.sprintf 
+                        "%s: list_values attempted to input_value but \
+                         something went wrong in file %s at position \
+                         %d\n%!" 
+                        __MODULE__ t.fn pos)
+          | Some s -> kont ((s,pos)::xs))
+
+  let list_values_seq t =
+    let max_pos = in_channel_length t.ch_r in
+    seek_in t.ch_r 0;
+    () |> iter_k (fun ~k:kont () -> 
+        let pos = pos_in t.ch_r in
+        match pos = max_pos with
+        | true -> Seq.empty
+        | false ->          
+          let s : string option = 
+            try Some(input_value t.ch_r) with _ -> None
+          in
+          match s with
+          | None -> 
+            failwith (Printf.sprintf 
+                        "%s: list_values attempted to input_value but \
+                         something went wrong in file %s at position \
+                         %d\n%!" 
+                        __MODULE__ t.fn pos)
+          | Some s -> 
+            Seq.cons (s,pos) (fun () -> kont () ()))
+    
 end
 
 module Make_2 : S = Make_1
