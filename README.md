@@ -1,7 +1,12 @@
-# A Key Value store using a persistent hashtable
+# A Key Value store
 
-The interface is described [here]()
+kv-hash is a key-value store for huge amounts of data, where the
+active set of keys is sufficiently large they cannot all be kept in
+memory.
 
-There is an example in `bin/example.ml`
+There is some documentation in [Documentation.md](Documentation.md)
+and in the code itself.
 
-Documentation is [here](https://www.tom-ridge.com/ocamldocs/kv-hash/index.html)
+OCamldoc documentation is
+[here](https://www.tom-ridge.com/ocamldocs/kv-hash/index.html)
+

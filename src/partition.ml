@@ -13,7 +13,7 @@ We assume the key space is a linear order (in fact, our usecase has
 
 How do we implement this? Each bucket covers a range l_i <= _ <
    h_i. The ranges are mutually disjoint and cover the key space. So,
-   h_i = l_{i+1} say. The partition contains a map from each l_i to a
+   [h_i = l_{i+1} say]. The partition contains a map from each l_i to a
    bucket identifier. Given a particular key k, we find the l_i which
    is just <= k (i.e., it is <= k, and is the largest such l) and look
    up the appropriate bucket identifier. This can be done efficiently
@@ -41,8 +41,8 @@ Terminology:
 NOTE In our use case keys are ints from 0 to Int.max_int
    inclusive. This means we miss out on using negative integers.
 
-FIXME distinguish offsets (and lengths) measured in ints {off_i} from
-   offsets measured in bytes {off_b}
+FIXME distinguish offsets (and lengths) measured in ints [{off_i}] from
+   offsets measured in bytes [{off_b}]
  *)
 
 [@@@warning "-33"](* FIXME *)
