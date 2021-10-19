@@ -177,9 +177,12 @@ module Partition_ii = struct
 
   (** Some I/O functions *)
 
-  (* NOTE there were some segfaults using output_value on the map
-     itself, so here we take a more cautious approach: we use
-     output_value for small items, and we ensure tail recursion *)
+  (* FIXME consider using an mmap'ed array of int, since that is a
+     very stable and compact format *)
+
+  (* NOTE could use output_value on the map itself, but here we take a
+     more cautious approach: we use output_value for small items, and
+     we ensure tail recursion *)
   let write_fn t ~fn =
     let oc = Stdlib.open_out_bin fn in
     let kvs = t |> to_list in

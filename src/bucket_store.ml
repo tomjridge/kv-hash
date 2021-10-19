@@ -66,6 +66,7 @@ module Private_mmap = struct
   module Bucket_store0 = Make_with_mmap(Bucket.Bucket0)
 end
 
+(** Version with file descriptor *)
 module Make_with_fd(Raw_bucket:BUCKET) = struct
   type raw_bucket = Raw_bucket.t
 

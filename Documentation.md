@@ -36,7 +36,7 @@ We think in terms of arbitrary keys and values, but it is important to remember 
 
 A bucket contains a small number of (int)key-(int)value pairs. Typically the keys are all close together, and part of some range $l_i \le k < h_i$. In our implementation, bucket keys are ints (hashes of an actual string key) and values are also ints (offsets in the "values file").
 
-A bucket resides in a single block on disk. For a block size of 4096 bytes, we can store at most 255 keys with their associated values.
+A bucket resides in a single block on disk. For a block size of 4096 bytes, we can store at most 255 keys with their associated values (512 64-bit-8-byte ints; 2 are needed for metadata; 510 ints available for kvs).
 
 We write buckets to disk at block-aligned offsets. Thus, bucket update is (we hope) atomic. The order that buckets flush to disk does not affect correctness.
 
@@ -54,7 +54,9 @@ l1 < h1        <- b1 subrange
 
 
 
-When this happens, we also have to update the partition, with the information that $l_1$ maps to (the identifier of) $b_1$ and $l_2$ maps to  $b_2$ (previously, the partition had a mapping for $l_1$ only).
+When this happens, we also have to update the partition (see below), with the information that $l_1$ maps to (the identifier of) $b_1$ and $l_2$ maps to  $b_2$ (previously, the partition had a mapping for $l_1$ only).
+
+Aside: We might also consider reclaiming the old bucket after splitting, and reusing it. At the moment, this functionality is not implemented. It would require some care to ensure that readers with an old partition don't misinterpret a recycled bucket as a real bucket for the old partition. For this reason, one might want to add generation numbers to buckets. An alternative would be to store the bucket range inside the bucket itself. Whatever solution is chosen, a reader would need to restart the operation if the bucket was detected to be recycled.
 
 
 
@@ -113,6 +115,16 @@ In addition, the lookaside table is stored under filename "lookaside_nnnn", wher
 
 
 
+## Summary of files involved
+
+In the standard configuration, we have the following files:
+
+* buckets.data - the potentially huge store of buckets
+* part_mmmm - a partition
+* log_nnnn - a frontend log file, prior to being merged
+* values.data - the values file (string values are converted to offsets in this file)
+* ctl.data - the control file
+
 
 
 ## Addendum: key hash collisions
@@ -135,7 +147,7 @@ NOTE the "values file" should then more properly be called the "key-values file"
 
 ## Addendum: requirements, and design justification
 
-We need to implement a key-value store, where set of keys is huge (much larger than main memory) and the active set of keys is huge (so, we expect that we potentially need to go to disk for each operation). 
+We need to implement a key-value store, where the set of keys is huge (much larger than main memory) and the active set of keys is huge (so, we expect that we potentially need to go to disk for each operation). 
 
 An additional requirement is that the implementation support a single writer with multiple concurrent readers, and the readers must not block. The readers and the writer must communicate only by disk (no RPC). Further, inserts and finds must be "as fast as possible".
 
