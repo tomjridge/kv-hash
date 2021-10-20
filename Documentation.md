@@ -165,37 +165,39 @@ The partition ensures that we can lookup an (int) key with at most 1 disk read. 
 
 The partition is implemented as a binary search tree, from int to int. For 1M partition-kvs (corresponding to 1M buckets, or roughly 200M real kvs stored in the buckets), each leaf perhaps takes up 3 ints worth, ie 24 bytes. So, the entire partition consumes of the order of 24MB for the leaves, and perhaps the same again for the internal nodes, 48MB in total. This amount scales linearly. 
 
-| Partition-kvs | Real kvs (200 * partition-kvs) | Partition size |
-| ------------- | ------------------------------ | -------------- |
-| 1M            | 200M                           | 48MB           |
-| 10M           | 2B                             | 480MB          |
-| 100M          | 20B                            | 4.8GB          |
+| Partition-kvs | Real kvs (200 * partition-kvs) | Partition size (in mem) |
+| ------------- | ------------------------------ | ----------------------- |
+| 1M            | 200M                           | 48MB                    |
+| 10M           | 2B                             | 480MB                   |
+| 100M          | 20B                            | 4.8GB                   |
 
 For 2B real kvs, 480MB is significant to reload when the partition changes. For 20B real kvs, 4.8GB is a significant amount of main memory to have to maintain.
 
 Around 10M partition-kvs loading a partition becomes a slightly lengthy process. We can ameliorate the partition reload by writing partition updates rather than the full partition. 
 
-For 100M partition-kvs (20B real kvs) we need to have 4.8GB of memory to hold the partition. A desktop machine might have 16GB of memory, so this is not problematic. For 400M partition-kvs (80B real kvs), desktop machines will struggle. For 1B partition-kvs (200B real kvs), we need about 48GB to store the partition. So this is really the domain of server machines.
+For 100M partition-kvs (20B real kvs) we need to have 4.8GB of memory to hold the partition. A desktop machine might have 16GB of memory, so this is not a problem. For 400M partition-kvs (80B real kvs), desktop machines will struggle. For 1B partition-kvs (200B real kvs), we need about 48GB to store the partition. So this is really the domain of server machines.
 
 Anyway, at this point we should probably replace the partition by a bona-fide B-tree. However, unless we keep the B-tree nodes in memory (and consuming 48GB), performance will suffer since we need multiple disk reads (for example) to locate an (int) key. However, assuming we keep all but the leaf nodes and their parents in main memory, we should be able to handle huge numbers of kvs with a B-tree, with at most 2 reads from storage to locate an (int) key. 
 
+It it worth noting that the partition only changes during a merge. So the main process, and the RO processes, can simply mmap a sorted array for the partition. Of course, this likely needs to be kept fully in main memory, but at least only one instance of the memory is required for all processes (the mmap memory is shared between processes). So only the merge process needs to keep the partition in main memory.
 
 
-## Addendum: typical file sizes for Tezos use case
+
+## Addendum: typical file sizes and memory usage, Tezos use case (570M kvs)
 
 One use case for kv-hash is as a backend index for Irmin (which is used as the store for Tezos). A typical replay of Tezos commits, starting from the genesis block, and involving over 1.3M commits, gives the following file sizes:
 
-| File         | Component                      | Size  | Can be shrunk?     |
-| ------------ | ------------------------------ | ----- | ------------------ |
-| store.pack   | Main irmin store (not kv-hash) | 49GB  | NA                 |
-| buckets.data | kv-hash                        | 24GB  | Y (bucket reclaim) |
-| partition    | kv-hash                        | 103MB | Y (marshal format) |
-| values.data  | kv-hash                        | 16GB  | N                  |
+| File         | Component                      | Size on disk            | Can be shrunk?                                               |
+| ------------ | ------------------------------ | ----------------------- | ------------------------------------------------------------ |
+| store.pack   | Main irmin store (not kv-hash) | 49GB                    | NA                                                           |
+| buckets.data | kv-hash                        | 24GB                    | Y, to 12GB (bucket reclaim)                                  |
+| partition    | kv-hash                        | 103MB (3070825 entries) | Y, to 48MB (marshal format)                                  |
+| values.data  | kv-hash                        | 16GB                    | Y, but not significantly; likely to double if storing keys as well |
 
 Comments:
 
-* TODO how many kvs are stored in the buckets?
-* buckets.data currently does no GC to reclaim buckets after splitting; it would be worth finding out how much space could potentially be saved (how many buckets become invalid?); in addition, we expect that buckets are, on average, only 75% full (a consequence of the design chosen)
-* The partition is kept in memory and synced to disk after a merge. The current format is not efficient, and could be improved (TODO: estimate disk usage with efficient format - maybe 80MB). Even so, keeping the partition in memory is likely to consume upwards of 100MB, which is significant.
+* How many kvs are stored in the buckets? 3M buckets, each of which stores on average 75% * 255 keys, approx 190 keys, giving roughly 570M keys (and the same number of values)
+* buckets.data currently does no GC to reclaim buckets after splitting; given the active buckets are 3070825, we estimate around 12GB of buckets.data is live, the rest can be reclaimed; in addition, note that buckets are, on average, only 75% full (a consequence of the design chosen)
+* The partition is kept in memory and synced to disk after a merge. The current format is not efficient, and could be improved (3M entries, each of two ints, gives 48MB total). Even so, keeping the partition in memory is likely to consume upwards of 100MB, which is significant. Actually, only the merge process has to keep this in memory  - since it is only during the merge that partition changes occur. The main process could mmap a sorted array representing the partition, as could the RO processes. Indeed, it is likely that the merge process, rather than keep the whole partition in memory, could use the mmap'ed partition, together with a list of updates, to reduce the memory usage to effectively small and constant space.
 * values.data currently does not store the keys; it should do (and we should monitor for hash collisions); this would increase the values.data file significantly (perhaps, to 30GB)
-* Taken together, we have that the file sizes for the kv-hash components are roughly the same size as the main store.pack, which seems too much. For Tezos, the keys and values are fixed size, so some space could be reclaimed by taking advantage of this fact. But likely the space saving would not be hugely significant.
+* Taken together, we have that the file sizes for the kv-hash components are roughly the same size as the main store.pack, which seems too much. For Tezos, the keys and values are fixed size, so some space could be reclaimed by taking advantage of this fact (eg for values.data file). But likely the space saving would not be hugely significant.
