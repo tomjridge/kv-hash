@@ -178,3 +178,24 @@ Around 10M partition-kvs loading a partition becomes a slightly lengthy process.
 For 100M partition-kvs (20B real kvs) we need to have 4.8GB of memory to hold the partition. A desktop machine might have 16GB of memory, so this is not problematic. For 400M partition-kvs (80B real kvs), desktop machines will struggle. For 1B partition-kvs (200B real kvs), we need about 48GB to store the partition. So this is really the domain of server machines.
 
 Anyway, at this point we should probably replace the partition by a bona-fide B-tree. However, unless we keep the B-tree nodes in memory (and consuming 48GB), performance will suffer since we need multiple disk reads (for example) to locate an (int) key. However, assuming we keep all but the leaf nodes and their parents in main memory, we should be able to handle huge numbers of kvs with a B-tree, with at most 2 reads from storage to locate an (int) key. 
+
+
+
+## Addendum: typical file sizes for Tezos use case
+
+One use case for kv-hash is as a backend index for Irmin (which is used as the store for Tezos). A typical replay of Tezos commits, starting from the genesis block, and involving over 1.3M commits, gives the following file sizes:
+
+| File         | Component                      | Size  | Can be shrunk?     |
+| ------------ | ------------------------------ | ----- | ------------------ |
+| store.pack   | Main irmin store (not kv-hash) | 49GB  | NA                 |
+| buckets.data | kv-hash                        | 24GB  | Y (bucket reclaim) |
+| partition    | kv-hash                        | 103MB | Y (marshal format) |
+| values.data  | kv-hash                        | 16GB  | N                  |
+
+Comments:
+
+* TODO how many kvs are stored in the buckets?
+* buckets.data currently does no GC to reclaim buckets after splitting; it would be worth finding out how much space could potentially be saved (how many buckets become invalid?); in addition, we expect that buckets are, on average, only 75% full (a consequence of the design chosen)
+* The partition is kept in memory and synced to disk after a merge. The current format is not efficient, and could be improved (TODO: estimate disk usage with efficient format - maybe 80MB). Even so, keeping the partition in memory is likely to consume upwards of 100MB, which is significant.
+* values.data currently does not store the keys; it should do (and we should monitor for hash collisions); this would increase the values.data file significantly (perhaps, to 30GB)
+* Taken together, we have that the file sizes for the kv-hash components are roughly the same size as the main store.pack, which seems too much. For Tezos, the keys and values are fixed size, so some space could be reclaimed by taking advantage of this fact. But likely the space saving would not be hugely significant.
