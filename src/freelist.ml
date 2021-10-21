@@ -58,6 +58,15 @@ module Make_1 = struct
     t.min_free := !(t'.min_free);
     ()
 
+  let debug_to_string t = 
+    let open Sexplib.Std in
+    Sexplib.Sexp.to_string_hum 
+      [%message "Freelist"
+          ~dont_reuse:(t.dont_reuse : int list)
+          ~do_reuse:(t.do_reuse : int list)
+          ~min_free:(t.min_free : int ref)
+      ]    
+
 end
 
 module Make_2 : FREELIST with type t = freelist = Make_1

@@ -46,6 +46,9 @@ let show_partition_buckets ~buckets_fn ~partition_fn =
         Bucket0.show (Bucket_store0.read_bucket bs v).raw_bucket;
         kont ((k',v')::rest))
         
+let show_freelist ~fn =
+  Freelist.load_no_promote ~fn |> Freelist.debug_to_string |> print_endline
+
 
 let _ = 
   match Sys.argv |> Array.to_list |> List.tl with
@@ -55,5 +58,6 @@ let _ =
   | ["show_buckets";fn] -> show_buckets ~fn
   | ["show_partition_buckets";partition_fn;buckets_fn] -> 
     show_partition_buckets ~buckets_fn ~partition_fn
+  | ["show_freelist";fn] -> show_freelist ~fn
   | _ -> failwith ""
   

@@ -257,12 +257,14 @@ k,v are sorted; k',v' are unsorted
     let init_sorted kvs = 
       let len = List.length kvs in
       assert(len <= max_sorted);
-      assert(len_unsorted() = 0);
-      assert(len_sorted() = 0);
+      (* NOTE following assertions may not hold if bucket is recycled *)
+      (* assert(len_unsorted() = 0); *)
+      (* assert(len_sorted() = 0); *)
       kvs |> List.iteri (fun i (k,v) -> 
           sorted.{2*i} <- k;
           sorted.{2*i +1} <- v);
       set_len_sorted len;
+      set_len_unsorted 0;
       ()
 
     let export () = 

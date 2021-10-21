@@ -23,6 +23,9 @@ module Partition = Partition
 
 (** {2 Non-volatile map (int -> int) } *)
 
+(** Bucket freelist *)
+module Freelist = Freelist
+
 module Nv_map_ii_intf = Nv_map_ii_intf
 module Nv_map_ii = Nv_map_ii
 module Nv_map_ii0 = Nv_map_ii.Nv_map_ii0
