@@ -58,9 +58,11 @@ module Make(S:sig
         ()
       | false -> 
         (* Partition changed; use gen as the new partition filename *)
-        warn(fun () -> "Merge_process: partition changed");
-        let fn = Util.part_fn gen in
-        Partition_ii.write_fn partition ~fn;
+        warn(fun () -> "Merge_process: partition changed; writing partition and freelist");
+        Partition_ii.write_fn partition ~fn:(part_fn gen);
+        (* We must also write out the updated freelist *)
+        let fl =  nv_map_ss |> Nv_map_ss_.get_nv_map_ii |> Nv_map_ii_.get_freelist in
+        Freelist.save fl ~fn:(freelist_fn gen);
         ()
     end;    
     let t2 = Unix.time () in

@@ -120,20 +120,17 @@ module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r
   include S
 
   module Pure = Make_1(S)
-
-  (* default *)
-  let split_hook = fun () -> ()
+  type pure_partition = Pure.t
 
   type t = {
-    mutable partition:Pure.t;
-    mutable split_hook:unit->unit;
+    mutable partition:pure_partition;
   }
 
   let to_list t : (k * r) list = t.partition |> Pure.to_list
                                  
   let of_list krs = 
     Pure.of_list krs |> fun p -> 
-    {partition=p;split_hook}
+    {partition=p}
 
   let find t k : k * r = Pure.find t.partition k
 
@@ -141,20 +138,10 @@ module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r
   let split t ~k1 ~r1 ~k2 ~r2 =
     Pure.split t.partition ~k1 ~r1 ~k2 ~r2 |> fun p -> 
     t.partition <- p;
-    t.split_hook ();
     ()
 
-  (* let set_split_hook t f = t.split_hook <- f *)
-
   let length t = Pure.length t.partition
-(*
-  (* FIXME prefer bin_prot for persistence *)
-  let write t oc = Pure.write t.partition oc
 
-  let read ic = 
-    Pure.read ic |> fun p -> 
-    { partition=p;split_hook }
-*)
 end
 
 module Make_partition = Make_2
@@ -210,5 +197,10 @@ module Partition_ii = struct
     end |> fun kvs -> 
     Stdlib.close_in_noerr ic;
     of_list kvs            
+
+  (* NOTE this is really the only use of impurity *)
+  let reload t ~fn =
+    read_fn ~fn |> fun t' -> 
+    t.partition <- t'.partition
 
 end

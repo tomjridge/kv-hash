@@ -26,23 +26,17 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
   (* Runtime handle *)
   type t = {
     bucket_store      : Bucket_store.t;
-    alloc_counter     : int ref;
-    alloc             : unit -> int;
+    mutable freelist  : Freelist.t;
     mutable partition : Partition_.t; (* NOTE mutable *)
   }
 
+  let alloc t = Freelist.alloc t.freelist
 
   (* create with an initial partition *)
-  let create_p ~buckets_fn ~partition = 
+  let create_p ~buckets_fn ~partition ~min_free_blk = 
     let bucket_store = Bucket_store.create ~fn:buckets_fn () in
-    let max_r = partition |> Partition_.to_list |> List.rev_map snd |> List.fold_left max 1 in
-    let alloc_counter = ref (1+max_r) in
-    let alloc () = 
-      !alloc_counter |> fun r -> 
-      incr alloc_counter;
-      r
-    in
-    { bucket_store; alloc_counter; alloc; partition }
+    let freelist = Freelist.create ~min_free:min_free_blk in
+    { bucket_store; freelist; partition; }
 
   let create_n ~buckets_fn ~n =
     let alloc_counter = ref 1 in
@@ -52,7 +46,8 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
       r
     in
     let partition = initial_partitioning ~alloc ~n in
-    create_p ~buckets_fn ~partition
+    let min_free_blk = !alloc_counter in
+    create_p ~buckets_fn ~partition ~min_free_blk
 
   let create ~buckets_fn =
     let n = Config.config.initial_number_of_partitions in
@@ -74,21 +69,22 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
     Partition_.find t.partition k |> fun (k,blk_i) -> 
     (* blk_i is the blk index within the store *)
     let bucket = Bucket_store.read_bucket t.bucket_store blk_i in
-    k,bucket
+    k,blk_i,bucket
 
 
   
   (** {2 Public interface: insert, find (FIXME delete)} *)
 
   (* FIXME we are syncing on each modification; may be worth caching? *)
+  (** NOTE the insert function is only called in the merge process *)
   let insert t k v = 
     trace(fun () -> Printf.sprintf "insert: inserting %d %d\n%!" k v);
     (* find bucket *)
-    let k1,bucket = find_bucket t k in
+    let k1,blk_i,bucket = find_bucket t k in
     Raw_bucket.insert bucket.raw_bucket k v |> function
     | `Ok -> Bucket_store.write_bucket t.bucket_store bucket
     | `Split(kvs1,k2,kvs2) -> 
-      let r1,r2 = t.alloc(),t.alloc() in 
+      let r1,r2 = alloc t,alloc t in 
       let b1 = Bucket_store.read_bucket t.bucket_store r1 in
       Raw_bucket.init_sorted b1.raw_bucket kvs1;
       let b2 = Bucket_store.read_bucket t.bucket_store r2 in
@@ -96,27 +92,16 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
       Partition_.split t.partition ~k1 ~r1 ~k2 ~r2;
       Bucket_store.write_bucket t.bucket_store b1;
       Bucket_store.write_bucket t.bucket_store b2;
+      Freelist.free t.freelist blk_i; (* free the old bucket *)
       trace(fun () -> Printf.sprintf "insert: split partition %d into %d %d\n%!" k1 k1 k2);
       ()  
     
   let find_opt t k = 
-    let _,bucket = find_bucket t k in
+    let _,_,bucket = find_bucket t k in
     Raw_bucket.find bucket.raw_bucket k
 
-  let delete _t _k = failwith "FIXME partition.ml: delete"
 
-
-  (* FIXME this can just be with partition, no? since partition is mutable anyway *)
-  let reload_partition t ~fn =     
-    let partition = Partition_.read_fn ~fn in
-    let max_r = 
-      Partition_.to_list partition |> fun krs -> 
-      (* rev_map to avoid stack-overflow/segfault *)
-      krs |> List.rev_map snd |> List.fold_left max 0
-    in
-    t.alloc_counter := 1+max_r; (* FIXME or max_r? *)
-    t.partition <- partition
-
+  let get_freelist t = t.freelist
 
 
   (** {2 Debugging} *)
@@ -124,7 +109,7 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
   let export t = 
     Partition_.to_list t.partition |> fun krs -> 
     List.rev krs |> List.rev_map (fun (k,_) -> 
-        find_bucket t k |> function (_,b) -> Raw_bucket.export b.raw_bucket) 
+        find_bucket t k |> function (_,_,b) -> Raw_bucket.export b.raw_bucket) 
     |> fun buckets -> 
     {partition=krs;buckets}
 
@@ -144,9 +129,9 @@ module Make_1(Raw_bucket:BUCKET)(Bucket_store : BUCKET_STORE with type raw_bucke
   let get_partition t = t.partition
 
   let show_bucket t k = 
-    find_bucket t k |> fun (_,b) -> Raw_bucket.show b.raw_bucket
+    find_bucket t k |> fun (_,_,b) -> Raw_bucket.show b.raw_bucket
 
-  let get_bucket t k = find_bucket t k |> fun (_,b) -> b.raw_bucket
+  let get_bucket t k = find_bucket t k |> fun (_,_,b) -> b.raw_bucket
     
 end (* Make_1 *)
 

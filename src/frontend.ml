@@ -18,9 +18,11 @@ Sequence of events:
 open Util
 
 module Nv_map_ss_ = Nv_map_ss_private.Nv_map_ss0
+module Nv_map_ii_ = Nv_map_ss_.Nv_map_ii_
+module Partition_ii = Partition.Partition_ii
 
 module Merge_process_ = Merge_process.Make(struct
-    module Nv_map_ii_ = Nv_map_ss_.Nv_map_ii_
+    module Nv_map_ii_ = Nv_map_ii_
     module Nv_map_ss_ = Nv_map_ss_
   end)
 
@@ -225,7 +227,7 @@ module Writer_1 = struct
       (* make sure we write an initial partition to partition 0 *)
       Nv_map_ss_.get_nv_map_ii nv_map_ss |> fun ii -> 
       Nv_map_ss_.Nv_map_ii_.get_partition ii |> fun part -> 
-      Partition.Partition_ii.write_fn part ~fn:(part_fn 0);
+      Partition_ii.write_fn part ~fn:(part_fn 0);
       Control.(set_field ctl F.partition 0);
       ()
     in
@@ -280,18 +282,29 @@ module Writer_1 = struct
         t.check_merge <- None;
 
         begin    (* Check if part_1234 exists, and if so, reload partition *)
+          (* FIXME maybe we should always write out the partition and
+             the freelist after a merge *)
           let part_mmmm = part_fn gen in
           Sys.file_exists part_mmmm |> function
           | false -> ()
           | true -> 
             warn(fun () -> Printf.sprintf "Reloading partition from file %s\n" part_mmmm);
             Nv_map_ss_.get_nv_map_ii t.nv_map_ss |> fun map_ii -> 
-            Nv_map_ss_.Nv_map_ii_.reload_partition 
-              map_ii
-              ~fn:part_mmmm;
+            Nv_map_ii_.get_partition map_ii |> fun part -> 
+            Partition_ii.reload part ~fn:part_mmmm;
             Control.(set_field t.ctl F.partition gen);
-            ()
-        end;
+
+            (* INVARIANT whenever the partition is updated, so is the
+               freelist, so reload it; conversely, when the freelist
+               changes so does the partition *)
+            let fn = freelist_fn gen in
+            assert(Sys.file_exists fn);
+            warn(fun () -> Printf.sprintf "Reloading freelist from file %s\n" fn);
+            Nv_map_ss_.get_nv_map_ii t.nv_map_ss |> fun map_ii -> 
+            Nv_map_ii_.get_freelist map_ii |> fun fl -> 
+            Freelist.reload_and_promote_reuse fl ~fn;
+            ()            
+        end
     end;
     begin 
       (* before we merge, we take care to update the Lru with the

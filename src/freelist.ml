@@ -6,24 +6,25 @@ open Freelist_intf
 type freelist = {
   mutable dont_reuse: int list;
   mutable do_reuse: int list;
-  max_used: int ref;
+  min_free: int ref;
 }
 
 module Make_1 = struct
 
   type t =  freelist
   
-  let create ~max_used = {
+  let create ~min_free = {
     dont_reuse=[];
     do_reuse=[];
-    max_used;
+    min_free=ref min_free;
   }
 
   let alloc t = 
     match t.do_reuse with
     | [] -> (
-        incr t.max_used;
-        !(t.max_used))
+        let r = !(t.min_free) in
+        incr t.min_free;
+        r)
     | x::xs -> 
       t.do_reuse <- xs;
       x
@@ -48,7 +49,15 @@ module Make_1 = struct
   let load_and_promote_reuse ~fn = 
     load_no_promote ~fn |> fun t -> 
     {t with dont_reuse=[]; do_reuse=t.do_reuse@t.dont_reuse}
-  
+
+  (* reload inplace *)
+  let reload_and_promote_reuse t ~fn = 
+    load_and_promote_reuse ~fn |> fun t' -> 
+    t.dont_reuse <- t'.dont_reuse;
+    t.do_reuse <- t'.do_reuse;
+    t.min_free := !(t'.min_free);
+    ()
+
 end
 
 module Make_2 : FREELIST with type t = freelist = Make_1

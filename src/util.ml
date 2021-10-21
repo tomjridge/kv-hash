@@ -202,7 +202,7 @@ let log_fn gen = "log_"^(string_of_int gen)
 
 let part_fn gen = "part_"^(string_of_int gen)
 
-
+let freelist_fn gen = "freelist_"^(string_of_int gen)
 
 (* t1 and t2 are ctypes kinds; t2_kind is a normal bigarray kind *)
 let coerce_bigarray1 t1 t2 t2_kind arr = 

@@ -24,31 +24,37 @@ module type S_kv = sig
 
   val close : t -> unit
 
+  (** [insert] should only be called from the merge process (normally
+     inserts go in the log) *)
   val insert : t -> k -> v -> unit
 
   val find_opt : t -> k -> v option
 
-  (** Private operation to reload a partition after concurrent
-     modification of store by another process FIXME remove this - we
-     can go via get_partition *)
-  val reload_partition: t -> fn:string -> unit    
-
-
   (** Access to subcomponents *)
 
   val get_partition: t -> Partition.Partition_ii.t
-
+  val get_freelist : t -> Freelist.t
 
   (** Debug *)
 
-  val export : t -> export_t
-
-  val show : t -> unit
-
+  val export      : t -> export_t
+  val show        : t -> unit
   val show_bucket : t -> k -> unit
-
-  val get_bucket : t -> k -> raw_bucket
+  val get_bucket  : t -> k -> raw_bucket
   
 end
+
+(*
+  val reload_partition: t -> fn:string -> unit    
+
+
+  (** Private operation to reload a partition after concurrent
+     modification of store by another process FIXME remove this - we
+     can go via get_partition *)
+  val reload_partition_and_freelist :
+    t -> part_fn:string -> freelist_fn:string -> unit
+*)
+
+
 
 module type S = S_kv with type k=int and type v=int

@@ -9,30 +9,19 @@ module type PURE_PARTITION = sig
   val to_list : t -> (k * r) list
   val of_list : (k * r) list -> t
   val length  : t -> int
-
-(*
-  val write   : t -> out_channel -> unit
-  val read    : in_channel -> t
-*)
 end
 
 
-(** An impure interface FIXME do we need this? *)
+(** An impure interface *)
 module type PARTITION = sig
   type k
   type r
-  type t
+  type pure_partition
+  type t = { mutable partition:pure_partition }
   val find           : t -> k -> (k * r)
   val split          : t -> k1:k -> r1:r -> k2:k -> r2:r -> unit
   val to_list        : t -> (k * r) list
   val of_list        : (k * r) list -> t
   val length         : t -> int
-
-  (* val set_split_hook : t -> (unit -> unit) -> unit *)
-
-(*
-  val write          : t -> out_channel -> unit
-  val read           : in_channel -> t
-*)
 end
 
