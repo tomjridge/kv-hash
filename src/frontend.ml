@@ -265,7 +265,7 @@ module Writer_1 = struct
       | None -> () (* should happen only when merging the very first log *)
       | Some {pid;gen} -> 
         assert(gen=t.gen-1);
-        
+
         begin    (* wait for merge *)
           let t1 = Unix.time () in
           warn (fun () -> Printf.sprintf "%s: waiting for merge\n%!" __MODULE__);
@@ -299,7 +299,12 @@ module Writer_1 = struct
          FIXME the Lru is potentially unbounded if finds occur without
          merging *)
       Lru_ss.batch_adjust t.lru_ss t.curr_map;
-      Lru_ss.trim t.lru_ss
+      Lru_ss.trim t.lru_ss;
+      (* we also flush all channels, so that a forked channel doesn't
+         write the same contents out twice etc (particularly, I am
+         thinking of the stat_trace.repr that is recorded when
+         replaying a trace *)
+      Stdlib.flush_all ()
     end;
     begin 
       let gen = t.gen in
