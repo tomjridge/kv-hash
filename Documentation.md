@@ -127,7 +127,23 @@ In the standard configuration, we have the following files:
 
 
 
-## Addendum: key hash collisions
+# Addenda
+
+The following sections discuss particular topics.
+
+## Requirements, and design justification
+
+We need to implement a key-value store, where the set of keys is huge (much larger than main memory) and the active set of keys is huge (so, we expect that we potentially need to go to disk for each operation). 
+
+An additional requirement is that the implementation support a single writer with multiple concurrent readers, and the readers must not block. The readers and the writer must communicate only by disk (no RPC). Further, inserts and finds must be "as fast as possible".
+
+A B-tree is the obvious solution. However, B-tree code can be somewhat complex. Further, it is common to cache the internal B-tree nodes in main memory, in order to ensure good performance. The design of kv-hash proceeds from these observations. It assumes that the non-leaf nodes can be kept easily in main memory, and easily persisted to disk, and replaces them with the partition datastructure. Thus, only leaves are kept on disk, in the form of buckets. We still have leaf-splitting, as occurs with a B-tree.
+
+
+
+
+
+## Key hash collisions
 
 We use xxhash which has a reasonable reputation for being uniformly distributed and having other good properties. After adding a billion keys with unique hashes, we have a billion hashes in the store. However, since we are using 63-bit ints, *for each used hash*, there are *more than 1 billion free hashes*. So, the chance of collision is low. But still we might worry about it.
 
@@ -143,23 +159,7 @@ NOTE the "values file" should then more properly be called the "key-values file"
 
 
 
-
-
-## Addendum: requirements, and design justification
-
-We need to implement a key-value store, where the set of keys is huge (much larger than main memory) and the active set of keys is huge (so, we expect that we potentially need to go to disk for each operation). 
-
-An additional requirement is that the implementation support a single writer with multiple concurrent readers, and the readers must not block. The readers and the writer must communicate only by disk (no RPC). Further, inserts and finds must be "as fast as possible".
-
-A B-tree is the obvious solution. However, B-tree code can be somewhat complex. Further, it is common to cache the internal B-tree nodes in main memory, in order to ensure good performance. The design of kv-hash proceeds from these observations. It assumes that the non-leaf nodes can be kept easily in main memory, and easily persisted to disk, and replaces them with the partition datastructure. Thus, only leaves are kept on disk, in the form of buckets. We still have leaf-splitting, as occurs with a B-tree.
-
-
-
-
-
-
-
-## Addendum: how big does the partition get?
+## How big does the partition get?
 
 The partition ensures that we can lookup an (int) key with at most 1 disk read. Similarly we need at most 1 disk read and 1 disk write to update an (int) key with an (int) value.
 
@@ -185,7 +185,7 @@ An alternative to holding the partition wholly in memory is to store only update
 
 
 
-## Addendum: typical file sizes and memory usage, Tezos use case (570M kvs)
+## Typical file sizes and memory usage, Tezos use case (570M kvs)
 
 One use case for kv-hash is as a backend index for Irmin (which is used as the store for Tezos). A typical replay of Tezos commits, starting from the genesis block, and involving over 1.3M commits, gives the following file sizes:
 
@@ -203,3 +203,48 @@ Comments:
 * The partition is kept in memory and synced to disk after a merge. The current format is not efficient, and could be improved (3M entries, each of two ints, gives 48MB total). Even so, keeping the partition in memory is likely to consume upwards of 100MB, which is significant. Actually, only the merge process has to keep this in memory  - since it is only during the merge that partition changes occur. The main process could mmap a sorted array representing the partition, as could the RO processes. Indeed, it is likely that the merge process, rather than keep the whole partition in memory, could use the mmap'ed partition, together with a list of updates, to reduce the memory usage to effectively small and constant space.
 * values.data is storing 500M values, which are (say) 3 ints (24 bytes) in the Tezos use case; efficient marshalling would reduce the values.data size to 12GB say; values.data currently does not store the keys; it should do (and we should monitor for hash collisions); this would increase the values.data file significantly (perhaps, to 24GB or more)
 * Taken together, we have that the file sizes for the kv-hash components are roughly the same size as the main store.pack, which seems too much. For Tezos, the keys and values are fixed size, so some space could be reclaimed by taking advantage of this fact (eg for values.data file - we know each value is fixed length). 
+
+
+
+## Bucket reuse
+
+In order to keep the size of the main buckets.data store low, it is necessary to recycle old buckets after splitting. This introduces some possible correctness issues, since an out-of-date partition may allow access to a recycled bucket via its old binding in the partition. In fact, everything works out providing some precautions are taken.
+
+Let's look at a typical sequence of events:
+
+```
+--log(n)---|--log(n+1)------>
+           |--merge(n)---|
+                         |--part(n)--->
+```
+
+Here, time increases to the right. log(n) is the period log(n) is written to. When the log is filled, a merge process (for that log) is initiated, and log(n+1) is written to. When the merge completes, the partition is written to disk and becomes the new partition for accessing the main store. 
+
+Several questions arise, such as: What happens if we use an old partition for accessing the main store, when there is a new partition available? However, we focus on the question of what happens to buckets that get recycled. Consider the sequence of events over 2 log rotations:
+
+
+
+```
+log      |n---|n+1--------|n+2----
+merge    |    |n---|      |n+1---|
+partition|         |n------------|n+1-----
+b p(n-1) |----------------|         // validity of b for p(n-1)
+error    |       ^-----------^      // error case
+```
+
+Suppose bucket b is split during merge n. This bucket is not reused straightaway (this would certainly lead to correctness issues). However, it is available for reuse during merge (n+1).
+
+Note that partition n -- p(n) for short -- becomes accessible after merge n, and that bucket b is not accessible via p(n). If b is reused during merge(n+1), then it becomes accessible via the next partition p(n+1).
+
+What would it take to incorrectly access b? We would need a partition that referenced b (so, p(n-1), the partition used before merge n), and we would need to access b at a point that it's data became invalid (for that partition), that is, from the beginning of merge(n+1) onwards. With respect to p(n-1), b is valid upto the beginning of merge(n+1). This is the "b p(n-1)" line in the diagram.
+
+Suppose we have a concurrent process servicing requests. Let's assume that the process always checks for a new partition before servicing a request. In order for something to go wrong, a request would have to start before p(n) became available (so that it used p(n-1) to access the bucket data), and finish after the start of merge(n+1) (so that the bucket b holds "incorrect data" for p(n-1)). This is the "error" line above. The first observation to make is that, given the timings we observe, this would be a very long time to service a single request. One is tempted to say that this "can never happen" in normal operation. This is perhaps true, given various assumptions about scheduling of processes, length of time of various operations, max time to complete a request etc. However, it is better to have a correctness criterion that holds without all these assumptions. For example, what if the log length is 1, rather than 1M? What if the time between the start of merge n and the end of merge n+1 is shorter than the average time to serve a request? We want to feel confident that we understand these cases. 
+
+*In order to rule out the error case, it suffices to ensure that we check the current partition at the start of servicing a request, and check it again at the end.* If it hasn't changed we can be sure we accessed the main bucket store correctly. If it has changed, we can simply load the new partition and retry the request, and check the partition again at the end. Obviously this criterion is overkill, and one could be much more nuanced (and so avoid a few unnecessary retries). However, since in our setup retries are expected to be extremely rare anyway, this is enough.
+
+We now return to an earlier question: What happens if we use an old partition for accessing the main store, when there is a new partition available? In fact, the old partition p(n-1) is valid (but not up-to-date) right up to the moment that merge(n+1) starts (and bucket b can be reused). Thus, validity of p(n-1) is the same as "validity of b for p(n-1)", since the only way the partition can become invalid is if b is reused. The situation is further complicated because concurrent processes are supposed to use the logs to service requests as far as possible, only resorting to the main bucket store if necessary. If log(n) is kept around after merge(n) completes, then it doesn't even matter that p(n-1) is (valid but) out of date wrt. the main buckets store, since log(n) provides the recent updates. In the current implementation, log(n) is kept till the end of log(n+1) (as opposed to being deleted after merge(n)). p(n-1) ++ log(n) ++ log(n+1) is then valid and up to date just up to the start of merge(n+1). This makes clear that it is not so necessary to update the partition as soon as a new one becomes available, and that the criterion above is perhaps overly strong.
+
+FIXME this section could do with some reworking
+
+
+
