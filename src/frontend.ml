@@ -36,7 +36,7 @@ module Op = struct
   open KV
   type op = k * [`Insert of v | `Delete ][@@deriving bin_io]
 end    
-open Op
+(* open Op *)
 
 (* Version using out_channel *)
 module Log_file_w = struct
@@ -56,6 +56,7 @@ module Log_file_w = struct
     | true -> `Buffer_short
     | false -> (
         output_value t.oc op;
+        flush t.oc;
         `Ok)
 
   let close t = close_out_noerr t.oc
@@ -102,34 +103,8 @@ module Log_file_w = struct
 end
 *)
 
-module Log_file_r = struct
 
-  type t = {
-    ic: Stdlib.in_channel;
-    max_len: int
-  }
-
-  let create ~fn ~max_len = {
-    ic=open_in_bin fn;
-    max_len;
-  }
-    
-  (* soft limit *)
-  let can_read t = pos_in t.ic < (Stdlib.in_channel_length t.ic)
-                                 
-  let rec read t : op = 
-    try 
-      input_value t.ic
-    with Sys_error _e -> 
-      warn(fun () -> Printf.sprintf "%s: Log_file_r read a partial value\n" __LOC__);
-      (* We read a partial value; try again *)
-      read t
-
-  let close t = close_in_noerr t.ic
-
-end
-
-
+(* NOTE Log_file_r is in frontend_ro.ml *)
 
 module Control_fields = struct
 
@@ -165,17 +140,27 @@ module Control = struct
 
   let create_mmap fd = Mmap.(of_fd fd char_kind)
 
+  (* NOTE we don't store the fd - it is just kept open forever; we
+     could close it (since closing it doesn't affect the mmap *)
   let create ~fn = 
     let ctl_fd = create_fd fn in
     let ctl_mmap = ctl_fd |> fun fd -> Mmap.(of_fd fd int_kind) in
     let ctl_buf = Mmap.sub ctl_mmap ~off:0 ~len:F.len in
     {ctl_mmap;ctl_buf}
 
+  let open_ ~fn =
+    let fd = Unix.(openfile fn [O_CREAT;O_RDONLY] 0o640) in
+    let ctl_mmap = Mmap.(of_fd fd int_kind) in
+    let ctl_buf = Mmap.sub ctl_mmap ~off:0 ~len:F.len in
+    {ctl_mmap;ctl_buf}    
+
   let get_field t = F.get_field t.ctl_buf
 
   let set_field t = F.set_field t.ctl_buf
 
 end
+
+let generation_starts_at_1 = true
 
 (** The writer is responsible for taking updates and recording in log,
    and periodically rotating logs and firing the merge process. *)
@@ -215,6 +200,7 @@ module Writer_1 = struct
     let ctl = Control.create ~fn:ctl_fn in
     let prev_map = Hashtbl.create 1 in (* prev_map is empty until we complete first log *)
     let gen = 1 in
+    assert(generation_starts_at_1);
     let curr_log = 
       Log_file_w.create ~fn:(log_fn gen) ~max_sz:max_log_len |> fun log -> 
       Control.(set_field ctl F.current_log gen);

@@ -19,6 +19,7 @@ module Bucket_store0 = Bucket_store.Bucket_store0
 
 module Partition_intf = Partition_intf
 module Partition = Partition
+module Partition_ii = Partition.Partition_ii
 
 
 (** {2 Non-volatile map (int -> int) } *)
@@ -44,6 +45,7 @@ module Nv_map_ss0 = Nv_map_ss_private.Nv_map_ss0
 module Frontend = Frontend
 module Merge_process = Merge_process
 
+module Frontend_ro = Frontend_ro
 
 module Private = struct
   module Config=Config
