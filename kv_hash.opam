@@ -8,6 +8,12 @@ doc: "https://tomjridge.github.io/FIXME/ocamldoc/index.html"
 bug-reports: "https://github.com/tomjridge/FIXME/issues"
 depends: [
   "dune" {>= "2.7"}
+  "core"
+  "xxhash"
+  "ctypes"
+  "core.bigstring_unix"
+  "lru"
+  "extunix"
   "odoc" {with-doc}
 ]
 build: [

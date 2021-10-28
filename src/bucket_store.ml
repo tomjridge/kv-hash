@@ -81,13 +81,25 @@ module Make_with_fd(Raw_bucket:BUCKET) = struct
     raw_bucket: Raw_bucket.t
   }
 
+  (* We let the OS know we want to access the file randomly, with no
+     caching if possible; FIXME should ideally use *)
+  let fadvise_ fd = 
+    (* if len is 0, it means "the whole file" on Linux *)
+    ExtUnix.Specific.(fadvise fd 0 0(*len*) POSIX_FADV_RANDOM);
+    ExtUnix.Specific.(fadvise fd 0 0(*len*) POSIX_FADV_DONTNEED);
+    (* POSIX_FADV_NOREUSE also an option, but strictly speaking it
+       doesn't fit our usecase *)
+    ()    
+
   let create ?sz:(sz=1024) ~fn () =
     Unix.(openfile fn [O_CREAT;O_TRUNC;O_RDWR;O_NONBLOCK] perm0) |> fun fd -> 
     Unix.(ftruncate fd (sz*Config.config.blk_sz));
+    fadvise_ fd;
     { fn; fd; closed=false }
 
   let open_ ~fn = 
     Unix.(openfile fn [O_CREAT;O_RDWR;O_NONBLOCK] perm0) |> fun fd -> 
+    fadvise_ fd;
     { fn; fd; closed=false }
 
   let blk_sz = Config.config.blk_sz

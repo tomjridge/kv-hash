@@ -13,6 +13,6 @@
 (package 
  (name kv_hash)
  (synopsis "A Key Value store using a persistent hashtable")
- (depends )) ; FIXME sexplib ppx_sexp_conv ppx_sexp_message
+ (depends core xxhash ctypes core.bigstring_unix lru extunix)) 
 
 
