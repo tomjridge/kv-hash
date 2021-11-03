@@ -12,6 +12,7 @@
 ; test10: stress test map_ss (keep inserting kvs forever)
 ; test11: stress test frontend
 ; test12: config file format
+; test13: test sys.time
 
 (executable
  (name "test1")
@@ -73,6 +74,11 @@
  (modules test12)
  (libraries kv_hash))
 
+(executable
+ (name "test13") 
+ (modules test13)
+ (libraries unix))
+
 (alias
  (name "executables")
- (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe))
+ (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe test13.exe))
