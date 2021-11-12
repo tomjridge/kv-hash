@@ -328,3 +328,15 @@ let _ = assert(int_sz_bytes = 8)
 
 
 
+let wait_for_file_to_exist ~fn = 
+  0 |> iter_k (fun ~k:kont n -> 
+      Sys.file_exists fn |> function
+      | false -> (
+          Thread.yield (); 
+          (if n mod 1_000_000_000 = 0 then 
+             Printf.printf "WARNING: %s: thread waited \
+                            for 1B iterations for file %s\n%!" __MODULE__ fn);
+          kont (n+1))
+      | true -> 
+        ())
+

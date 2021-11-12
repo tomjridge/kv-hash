@@ -279,18 +279,10 @@ module Reader1 = struct
     (* NOTE existence of ctl is taken to indicate that the other
        relevant files exist too; so we wait for ctl to exist before
        doing anything *)
-    let ctl = 
+    let ctl =       
       (* Load control; if it doesn't exist, wait till it does *)
-      0 |> iter_k (fun ~k:kont n -> 
-          Sys.file_exists ctl_fn |> function
-          | false -> (
-              Thread.yield (); 
-              (if n mod 1_000_000_000 = 0 then 
-                 Printf.printf "WARNING: %s: read-only thread waited \
-                                for 1B iterations for control file\n%!" __MODULE__);
-              kont (n+1))
-          | true -> 
-            Control.(open_ ~fn:ctl_fn))
+      Util.wait_for_file_to_exist ~fn:ctl_fn;
+      Control.(open_ ~fn:ctl_fn)
     in
     let values = Values_file.open_ ~fn:values_fn in
     (* NOTE from the point we read the current partition number from

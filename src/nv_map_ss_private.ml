@@ -238,7 +238,7 @@ module Make_2(Raw_bucket:BUCKET) = struct
       debug=Hashtbl.create 1 }
 *)
 
-  let create values nv_map_ii = {
+  let create values (nv_map_ii:Nv_map_ii_.t) = {
     values;
     nv_int_map=nv_map_ii;
     debug=Hashtbl.create 1 

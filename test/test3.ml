@@ -14,7 +14,7 @@ let go () =
   let t1 = time () in
   let fn = "test.db" in
   (* open db; create drops any existing db *)
-  Kv.create ~buckets_fn:fn () |> fun t -> 
+  Kv.create (Values_file.create ~fn:"values.data") (Kv.Nv_map_ii_.create_f  ~buckets_fn:fn) |> fun t -> 
   let t2 = time () in
   Printf.printf "Create completed in %f\n%!" (t2 -. t1);
   0 |> iter_k (fun ~k:kont i -> 
