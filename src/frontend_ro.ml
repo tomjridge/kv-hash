@@ -248,6 +248,12 @@ module Reader1 = struct
   (** Sync to the latest log and partition *)
   let sync t = 
     let ctl = t.ctl in
+    (* FIXME we should retry when log changes only; and part(n) is
+       only invalid by log(n+3); we want to know that there is a
+       single point in time when the log and the partition were
+       current; this occurs if partition is unchanged over a period
+       and we read the log; so we should retry only if partition
+       changes *)
     let get_m () = Control.(get_field ctl F.current_log) in
     let get_n () = Control.(get_field ctl F.partition) in
     () |> iter_k (fun ~k:retry () -> 
