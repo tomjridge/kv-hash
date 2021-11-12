@@ -12,13 +12,55 @@ There are several concepts we need to describe:
 
 * converting keys to ints; converting values to ints; the "values file"
 * bucket 
+* bucket store
 * partition
 * non-volatile map (int -> int)
 * non-volatile map (string -> string)
 * frontend log rotation
 * control file
 
+## Architecture
 
+```
++---------------------------------------------------------------+
+| +------------------------------------------------+            |
+| | +------------------------------+               |            |
+| | |  +-+  +-+  +-+               |               |            |
+| | |  | |  | |  | |  Buckets*     | Bucket store  |            |
+| | |  +-+  +-+  +-+  ...          |               |            |     
+| | +------------------------------+               |            |     
+| |          ^                                     |            |     
+| |          |                     +-----------+   |            |
+| |          |                     | Freelist* |   |            |
+| |          ---|                  +-----------+   |            |
+| |             |                                  |            |
+| |   +--------------------------+                 |            |
+| |   |  |  |  |  |  |  |  |  |  | Partition*      |            |
+| |   +--------------------------+                 | Nv_map_ii  |
+| +------------------------------------------------+            |
+|                                                               |
+| +--------------------------+                                  |
+| | Values*                  |                                  |
+| +--------------------------+                                  | Nv_map_ss
++---------------------------------------------------------------+          
+                                                                           
++-------------------------------------------------+                        
+| +-------------------------------------------+   |
+| | Log(n)*                                   |   |                        
+| +-------------------------------------------+   |
+|                                                 |                        
+| +-------------------------------------------+   |
+| | Log(n+1)*                                 |   |                        
+| +-------------------------------------------+   |
+|                                                 |
+| +----------+                                    |
+| | Control* |                                    |
+| +----------+                                    | Frontend
++-------------------------------------------------+
+                            
+
+Items marked by a * are backed by a file in the system
+```
 
 ## Converting string keys and values to integers
 
@@ -57,6 +99,12 @@ l1 < h1        <- b1 subrange
 When this happens, we also have to update the partition (see below), with the information that $l_1$ maps to (the identifier of) $b_1$ and $l_2$ maps to  $b_2$ (previously, the partition had a mapping for $l_1$ only).
 
 Aside: We might also consider reclaiming the old bucket after splitting, and reusing it. At the moment, this functionality is not implemented. It would require some care to ensure that readers with an old partition don't misinterpret a recycled bucket as a real bucket for the old partition. For this reason, one might want to add generation numbers to buckets. An alternative would be to store the bucket range inside the bucket itself. Whatever solution is chosen, a reader would need to restart the operation if the bucket was detected to be recycled.
+
+
+
+## Bucket store
+
+A bucket store is just a collection of buckets, typically backed by a file or mmap. A freelist of free buckets that can be used at the next merge is also maintained.
 
 
 
@@ -246,5 +294,29 @@ We now return to an earlier question: What happens if we use an old partition fo
 
 FIXME this section could do with some reworking
 
+Timelines:
+
+```
+----> time
+
+0        1       2       3       4       5       6       7       8       9       10
++--------+-------+-------+-------+-------+-------+-------+-------+-------+-------+
+         log(1)          log(2)          log(3)          log(4)
+                         m(1)----X       m(2)----X       m(3)----X
+part(0)----------------------------------X
+                                 part(1)-----------------X
+                                                 part(2)-----------------X
+                                                                 part(3)-----------------X
+```
+Explanation:
+0. The initial partition is created
+1. We start writing to log(1)
+2. -
+3. We finish log(1), initiate a merge of log(1) -- m(1) -- and proceed with log(2)
+4. m(1) finishes, part(1) is written and becomes a valid partition; part(0) is also valid since no buckets are recycled until m(2) starts
+5. Finish log(2), initiate m(2), start log(3). NOTE At this point, part(0) is no longer valid because blocks that became garbage in m(1) may be reused in m(2).
+6. m(2) finishes, part(2) is written
+7. Finish log(3), initiate m(3), start log(4). NOTE part(1) no longer valid.
+8. m(3) finishes, part(3) is written
 
 

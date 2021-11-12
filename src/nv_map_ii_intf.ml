@@ -17,10 +17,23 @@ module type S_kv = sig
   type k
   type v
 
-  (** Create with initial number of partitions *)
-  val create_n : buckets_fn:string -> n:int -> t
+  (** Create with initial number of partitions; NOTE doesn't initially
+     write partition or freelist since they are typically udpated by
+     the merge process *)
+  val create_fn : buckets_fn:string -> n:int -> t
 
-  val create   : buckets_fn:string -> t
+  val create_f  : buckets_fn:string -> t
+
+  val open_rw : 
+    buckets_fn   : string -> 
+    partition_fn : string -> 
+    freelist_fn  : string -> 
+    t
+
+  val open_ro : 
+    buckets_fn   : string -> 
+    partition_fn : string -> 
+    t
 
   val close : t -> unit
 

@@ -22,10 +22,29 @@ To service a request:
 FIXME we need to decide how to test this rigorously.
 
 FIXME this code feels a bit trickier than it should be
+
+Following pic taken from Documentation.md:
+
+
+----> time
+
+0        1       2       3       4       5       6       7       8       9       10
++--------+-------+-------+-------+-------+-------+-------+-------+-------+-------+
+         log(1)          log(2)          log(3)          log(4)
+                         m(1)----X       m(2)----X       m(3)----X
+part(0)----------------------------------X
+                                 part(1)-----------------X
+                                                 part(2)-----------------X
+                                                                 part(3)-----------------X
+
+
  *)
 
 open Util
+
+(* NOTE this brings in a lot of modules, like Nv_map_ss_ *)
 open Frontend
+
 
 (* open Frontend.KV *)
 open Frontend.Op
@@ -39,7 +58,7 @@ module Log_file_r = struct
   (* FIXME we need to think about what to do if a log file becomes
      corrupted and cannot be read in full *)
 
-  open KV
+  open Frontend.KV
 
   type t = {
     ic: Stdlib.in_channel;
@@ -80,6 +99,11 @@ module Log_file_r = struct
     
   let close t = close_in_noerr t.ic
 
+  let find_opt t k = Hashtbl.find_opt t.tbl k |> function
+    | None -> None
+    | Some `Delete -> None
+    | Some (`Insert v) -> Some v
+
 end
 
 module Reader1 = struct
@@ -95,13 +119,23 @@ module Reader1 = struct
     (** The int key corresponds to the filename of the file that backs
        the relevant log *)
 
+    mutable curr_log: int;
+    (** The current log the last time the logs were synced; may lag
+       the control file *)
+    
+
     mutable part_n : int;  
     (** The int corresponding to the file the partition was loaded
        from; not necessarily the current partition *)
 
-    partition : Partition_ii.t;
-    buckets   : Bucket_store0.t;
-    values    : Values_file.t
+    nv_map_ss   : Nv_map_ss_.t;
+    (** nv_map_ss must be updated when the partition changes *)
+
+
+    (* partition : Partition_ii.t; - part of nv_map_ii *)
+
+    (* buckets   : Bucket_store0.t; - part of nv_map_ii *)
+    (* values    : Values_file.t - part of nf_map_ss  *)
   }
 
   let max_initial_wait = 60 (* seconds *)
@@ -119,6 +153,9 @@ module Reader1 = struct
      FIXME perhaps abstract this control flow and see if the code is any clearer; with_constant ~counter (f: int -> [`Ok | `Error]); if `Error, but counter changed, we retry
   *)
 
+  let get_partition t : Partition_ii.t = 
+    t.nv_map_ss |> Nv_map_ss_.get_nv_map_ii |> Nv_map_ii_.get_partition
+
   let with_constant ~(counter:unit -> int) (f:int -> 'a) =
     () |> iter_k (fun ~k:retry () -> 
         let c = counter () in
@@ -129,6 +166,9 @@ module Reader1 = struct
 
   let _ : counter:(unit -> int) -> (int -> 'a) -> 'a = with_constant
 
+  (** Sync the logs; after calling, the logs are guaranteed to be
+     synced to some point between when the function started and when
+     it ended *)
   let sync_logs ctl logs =
     let curr_log_n () = Control.(get_field ctl F.current_log) in
     let sync_log n = 
@@ -177,10 +217,16 @@ module Reader1 = struct
       (fun k v -> if k=n || k=n-1 then Some v else (Log_file_r.close v; None));
     (* at this point, the logs are synced to some consistent point
        between the start of the sync_logs function and the end *)
-    ()
+    n
 
-  (* FIXME this will reload the partition every time, but it should
-     only do so if part_n has changed *)
+  let sync_logs t = 
+    sync_logs t.ctl t.logs |> fun n -> 
+    t.curr_log <- n
+    
+  (* FIXME this will reload the partition every time, but really it
+     should only do so if part_n has changed *)
+  (** Sync the partition; after calling, the partition is guaranteed
+     current for some point during the call *)
   let sync_partition t = 
     let curr_part_n () = Control.(get_field t.ctl F.partition) in
     () |> iter_k (fun ~k:retry () ->           
@@ -188,8 +234,8 @@ module Reader1 = struct
         let n_changed () = n <> curr_part_n () in
         let fn = part_fn n in        
         try
-          Partition_ii.reload t.partition ~fn;
-          t.part_n <- n
+          Partition_ii.reload (get_partition t) ~fn;
+          t.part_n <- n;
         with Sys_error _e -> (
             (* assume file missing *)
             match n_changed() with
@@ -199,6 +245,7 @@ module Reader1 = struct
             | true -> retry () ));
     ()
 
+  (** Sync to the latest log and partition *)
   let sync t = 
     let ctl = t.ctl in
     let get_m () = Control.(get_field ctl F.current_log) in
@@ -206,7 +253,7 @@ module Reader1 = struct
     () |> iter_k (fun ~k:retry () -> 
         let m = get_m () in
         let n = get_n () in
-        sync_logs t.ctl t.logs;
+        sync_logs t;
         sync_partition t;
         (* NOTE the order of getting m and n is reversed here; the
            point is: if nothing has changed we are sure there is some
@@ -219,7 +266,7 @@ module Reader1 = struct
 
   let open_ 
       ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
       ?values_fn:(values_fn=Config.config.values_fn)
       ()
     =
@@ -239,19 +286,22 @@ module Reader1 = struct
           | true -> 
             Control.(open_ ~fn:ctl_fn))
     in
+    let values = Values_file.open_ ~fn:values_fn in
     (* NOTE from the point we read the current partition number from
        control, to the time we try to read the partition file itself,
        the partition number may change and the partition we are
        looking for may be deleted; so if something goes wrong we check
        the control again and retry if something has changed *)
-    let part_n,partition =    
+    (* nv_map_ii *)
+    let part_n,nv_map_ii =    
       let curr_part_n () = Control.(get_field ctl F.partition) in
       () |> iter_k (fun ~k:retry () ->           
           let n = curr_part_n () in
           let n_changed () = n <> curr_part_n () in
           let fn = part_fn n in
           try
-            n,Partition_ii.read_fn ~fn 
+            (* FIXME make sure Nv_map_ii_.open_ro doesn't leak fds *)
+            n,Nv_map_ii_.open_ro ~buckets_fn ~partition_fn:fn              
           with Sys_error _e -> (
               (* assume file missing *)
               match n_changed() with
@@ -260,34 +310,51 @@ module Reader1 = struct
                                 not read partition from file %s\n%!" fn |> failwith
               | true -> retry () ))
     in
-    let buckets = Bucket_store0.open_ ~fn:buckets_fn in
-    let values = Values_file.open_ ~fn:values_fn in
+    (* nv_map_ss *)
+    let nv_map_ss = Nv_map_ss_.create values nv_map_ii in    
     (* logs *)
     let logs = Hashtbl.create 3 in
-    sync_logs ctl logs;
-    { ctl; logs; part_n; partition; buckets; values }
+    let t = { ctl; logs; curr_log=0; part_n; nv_map_ss; } in    
+    sync_logs t;
+    assert(t.curr_log > 0);
+    t
 
-(*  
-  (* FIXME to implement this we really need the curr_log and prev log in the state *)
+  let close t = 
+    (* Control.close t.ctl; FIXME add *)
+    Nv_map_ss_.close t.nv_map_ss;
+    t.logs |> Hashtbl.iter (fun _ log -> Log_file_r.close log);
+    Hashtbl.clear t.logs;
+    ()
+        
   let find' t k = 
-    let map = function `Insert v -> Some v | `Delete -> None in
-    let n = 
-    Hashtbl.find_opt 
-
-  
+    let curr_log_n = t.curr_log in
+    let curr_log = 
+      (* invariant: t.logs contains t.curr_log *)
+      Hashtbl.find t.logs curr_log_n in
+    (* check curr_log *)
+    Log_file_r.find_opt curr_log k |> function
+    | Some v -> Some v
+    | None -> 
+      begin  (* check prev_log *)
+        Hashtbl.find_opt t.logs (curr_log_n - 1) |> function
+        | None -> None
+        | Some prev_log -> 
+          Log_file_r.find_opt prev_log k |> function
+          | Some v -> Some v
+          | None -> None
+      end |> function
+      | Some v -> Some v
+      | None -> 
+        (* now go to the main store *)
+        Nv_map_ss_.find_opt t.nv_map_ss k
+        
+  (** NOTE find requires that partition doesn't change (otherwise it will just retry); then it syncs the partition and the logs and calls find *)
   let find t k = 
     with_constant 
       ~counter:(fun () -> Control.(get_field t.ctl F.partition))
       (fun _ -> 
-         sync_partition t;
-         with_constant 
-           ~counter:(fun () -> Control.(get_field t.ctl F.current_log))
-           (fun _ -> 
-              sync_logs t.ctl t.logs;
-              find' t k))
-*)              
-    
-
+         sync t;
+         find' t k)
 
 end
 

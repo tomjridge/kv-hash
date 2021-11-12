@@ -23,6 +23,7 @@ module Make_1 = struct
     match t.do_reuse with
     | [] -> (
         let r = !(t.min_free) in
+        assert(r < Int.max_int);
         incr t.min_free;
         r)
     | x::xs -> 

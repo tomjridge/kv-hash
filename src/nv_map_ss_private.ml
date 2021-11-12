@@ -226,21 +226,31 @@ module Make_2(Raw_bucket:BUCKET) = struct
       module Nv_map_ii_=Nv_map_ii_
     end)
 
+(*
   let create 
       ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
       ?values_fn:(values_fn=Config.config.values_fn)
       () = 
-    Nv_map_ii_.create ~buckets_fn |> fun nv_int_map -> 
+    Nv_map_ii_.create_f ~buckets_fn |> fun nv_int_map -> 
     let values = Values_file.create ~fn:values_fn in
     { values; 
       nv_int_map; 
       debug=Hashtbl.create 1 }
+*)
+
+  let create values nv_map_ii = {
+    values;
+    nv_int_map=nv_map_ii;
+    debug=Hashtbl.create 1 
+  }    
 
   let batch_update_debug _t _ops = () (* FIXME for debug version, comment this line *)
   (* include Made_1.With_debug(Made_1.Basic)  *)
   (* FIXME add cache when sure this is working correctly *)
   include Made_1.Basic
 
+
+  (** NOTE close will close the underling values file, and the nv_map_ii *)
   let close t = 
     Values_file.close t.values;
     Nv_map_ii_.close t.nv_int_map

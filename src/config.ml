@@ -32,13 +32,15 @@ module T = struct
     initial_number_of_partitions : int;
     max_log_length               : int; (* in bytes *)
     lru_capacity                 : int; (* in kvs *)
-    debug_bucket                 : bool;
+    debug_bucket                 : bool; (* FIXME use env var *)
     blk_sz                       : int;
     bucket_sorted                : int;
     bucket_unsorted              : int;
     ctl_fn                       : string;
     values_fn                    : string;
-    bucket_store_fn              : string;
+    buckets_fn                   : string;
+    partition_fn                 : string;
+    freelist_fn                  : string;
   }[@@deriving sexp]
 end
 include T
@@ -54,7 +56,9 @@ let default_config = {
   bucket_unsorted              = 10;
   ctl_fn                       = "ctl.data";
   values_fn                    = "values.data";
-  bucket_store_fn              = "buckets.data";  
+  buckets_fn                   = "buckets.data";  
+  partition_fn                 = "partition.data";
+  freelist_fn                  = "freelist.data";
 }
 
 let read ~fn = Sexplib.Sexp.load_sexp fn |> config_of_sexp

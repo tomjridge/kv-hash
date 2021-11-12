@@ -193,7 +193,7 @@ module Writer_1 = struct
   let create 
       ?max_log_len:(max_log_len=Config.config.max_log_length) 
       ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
       ?values_fn:(values_fn=Config.config.values_fn)
       () 
     = 
@@ -207,7 +207,9 @@ module Writer_1 = struct
       log
     in
     let curr_map = Hashtbl.create (max_log_len / (8+8))  in  (* approx how many entries in log for tezos *)
-    let nv_map_ss = Nv_map_ss_.create ~buckets_fn ~values_fn () in
+    let values = Values_file.create ~fn:values_fn in
+    let nv_map_ii = Nv_map_ii_.create_f ~buckets_fn in
+    let nv_map_ss = Nv_map_ss_.create values nv_map_ii in
     let lru_ss = Lru_ss.create Config.config.lru_capacity in
     let _ =
       (* make sure we write an initial partition to partition 0 *)
@@ -234,7 +236,7 @@ module Writer_1 = struct
   let open_ 
       ?max_log_len:(max_log_len=Config.config.max_log_length) 
       ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.bucket_store_fn)
+      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
       ?values_fn:(values_fn=Config.config.values_fn)
       () 
     =

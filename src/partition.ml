@@ -161,6 +161,8 @@ module Partition_ii = struct
 
   include Partition
 
+  let suc_max_value t : int = 
+    1 + (to_list t |> List.fold_left (fun n (_k,r) -> max n r) 0)
 
   (** Some I/O functions *)
 
