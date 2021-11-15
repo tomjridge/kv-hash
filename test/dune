@@ -1,11 +1,11 @@
 ; Test executables:
 ;
-; test1: phashtable test 1
-; test2: phashtable test 2
+; MOVED (to test_nv_map_ii) test1: nv_map_ii test 1
+; MOVED (to test_nv_map_ii) test2: nv_map_ii test 2
 ; test3: string->string map
 ; test4: batch test
 ; IGNORE test5: fork with mmap test
-; test6: frontend test
+; MOVED (to test_frontend) test6: frontend test
 ; IGNORE test7: unbuffered writes performance
 ; IGNORE test8: bigarray coerce
 ; test9: load partition
@@ -13,16 +13,17 @@
 ; test11: stress test frontend
 ; test12: config file format
 ; test13: test sys.time
+; test_frontend: test code for frontend.ml
 
-(executable
- (name "test1")
- (modules Test1)
- (libraries kv_hash))
-
-(executable
- (name "test2")
- (modules Test2)
- (libraries kv_hash))
+; (executable
+;  (name "test1")
+;  (modules Test1)
+;  (libraries kv_hash))
+; 
+; (executable
+;  (name "test2")
+;  (modules Test2)
+;  (libraries kv_hash))
 
 (executable
  (name "test3")
@@ -39,10 +40,10 @@
  (modules Test5)
  (libraries kv_hash threads))
 
-(executable
- (name "test6") ; frontend
- (modules Test6)
- (libraries kv_hash threads))
+; (executable
+;  (name "test6") ; frontend
+;  (modules Test6)
+;  (libraries kv_hash threads))
 
 (executable
  (name "test7") ; random rw to file
@@ -79,6 +80,11 @@
  (modules test13)
  (libraries unix))
 
+(executable
+ (name "test_frontend") 
+ (modules test_frontend)
+ (libraries kv_hash))
+
 (alias
  (name "executables")
- (deps test1.exe test2.exe test3.exe test4.exe test5.exe test6.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe test13.exe))
+ (deps test3.exe test4.exe test5.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe test13.exe test_frontend.exe))

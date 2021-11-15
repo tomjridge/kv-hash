@@ -51,12 +51,14 @@ In order to implement this approach, we need to track (within the
 
 open Util
 
+(** Bucket configuration: we can choose how many sorted elements, and
+   how many unsorted, in order to get the best performance *)
 module type BUCKET_CONFIG = sig
   val max_sorted            : int  
   val max_unsorted          : int
   val bucket_length_in_ints : int 
-  (** length of backing int bigarray, measured in ints; must be large
-     enough to include 2*(max_sorted+max_unsorted)+2 *)
+  (** Length of backing int bigarray, measured in ints; must be large
+      enough to include 2*(max_sorted+max_unsorted)+2 *)
 end
 
 include struct
@@ -75,19 +77,26 @@ module type BUCKET = sig
   type t
   type bucket = t
 
-  (* val create_empty : ?arr:int_bigarray -> unit -> bucket *)
-
-  (* val create_nonempty : int_bigarray -> bucket *)
-
-  val to_bigarray : bucket -> int_bigarray (* guaranteed to be of size len *)
-  val of_bigarray  : int_bigarray -> bucket
-
   type k := int
   type v := int
 
+  (** NOTE The backing int bigarray is not controlled by the bucket;
+     so we have functions to convert between a bucket and a bigarray,
+     and a way to initialize a new bigarray *)
+
+  (** Return the int bigarray underlying the bucket *)
+  val to_bigarray : bucket -> int_bigarray (* guaranteed to be of size bucket_length_in_ints *)
+
+  (** Construct a bucket from a bigarray; if the bigarray is new, we
+     will need to initialize it using [init_sorted] *)
+  val of_bigarray : int_bigarray -> bucket
+
+  (** Initialize a bucket FIXME the list must fit in the backing array *)
+  val init_sorted : bucket -> (k*v)list -> unit
+
   val find        : bucket -> k -> v option
   val insert      : bucket -> k -> v -> [ `Ok | `Split of (k*v)list * k * (k*v)list ]
-  val init_sorted : bucket -> (k*v)list -> unit
+
   val show        : bucket -> unit
   val export      : bucket -> exported_bucket
 

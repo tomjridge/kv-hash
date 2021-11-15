@@ -2,19 +2,24 @@
    into 2 new buckets) and can be recycled (ie reused in the NEXT
    merge).
 
-NOTE on block recycling: Other processes (eg read only processes)
-   should always start a lookup by checking whether they have the
-   current partition. In addition they must always check for partition
-   change just before returning any result; if the partition has
-   changed since the process started the operation, the process must
-   retry the operation; this ensures that recycled blocks are not
-   misinterpreted leading to incorrect results.
+During a merge, a bucket can become full. At this point it is split
+   into two new buckets. The old bucket is then free to be
+   reused. Because processes still hold the old partition (and thus,
+   can access the old bucket) it is important not to reuse the bucket
+   immediately. Instead, we allow the bucket to be reused during the
+   NEXT merge.
 
-   Alternatively, if we can ensure that any other process can execute
-   a single operation in less time than it takes from the start of one
-   merge to the start of another, then we are (probably) safe, since
-   no block will be recycled during that time (we recycle old blocks
-   on the NEXT merge).  *)
+Thus, during a merge we have two types of free bucket: (1) those that
+   can be reused immediately (they became free during a previous
+   merge) and (2) those we can only reuse from the next merge onwards.
+
+Currently, at the end of a merge, we write the freelist state into a
+   file. When we load this file at the beginning of the next merge, we
+   can "promote" the buckets of type (2) so that we can reuse them
+   during this merge. This is safe providing no other process has
+   access to an old partition at this point.
+
+ *)
 
 
 module type FREELIST = sig
@@ -25,7 +30,10 @@ module type FREELIST = sig
   val free   : t -> int -> unit
   val save   : t -> fn:string -> unit
 
+  (** Debugging: load a freelist, but don't promote newly free buckets *)
   val load_no_promote          : fn:string -> t
+
+  (** Load a freelist, and promote newly free buckets so they can be reused *)
   val load_and_promote_reuse   : fn:string -> t
 
   (* In-place modification of t *)

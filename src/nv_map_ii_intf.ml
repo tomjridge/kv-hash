@@ -24,6 +24,7 @@ module type S_kv = sig
 
   val create_f  : buckets_fn:string -> t
 
+  (* FIXME perhaps these should take the value rather than the fname *)
   val open_rw : 
     buckets_fn   : string -> 
     partition_fn : string -> 
@@ -37,6 +38,8 @@ module type S_kv = sig
 
   val close : t -> unit
 
+  (* FIXME add checks that rw functions are only called on rw
+     instances etc? *)
   (** [insert] should only be called from the merge process (normally
      inserts go in the log) *)
   val insert : t -> k -> v -> unit
@@ -56,18 +59,6 @@ module type S_kv = sig
   val get_bucket  : t -> k -> raw_bucket
   
 end
-
-(*
-  val reload_partition: t -> fn:string -> unit    
-
-
-  (** Private operation to reload a partition after concurrent
-     modification of store by another process FIXME remove this - we
-     can go via get_partition *)
-  val reload_partition_and_freelist :
-    t -> part_fn:string -> freelist_fn:string -> unit
-*)
-
 
 
 module type S = S_kv with type k=int and type v=int

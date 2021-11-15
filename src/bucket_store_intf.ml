@@ -2,7 +2,7 @@
 
 module type BUCKET_STORE = sig
 
-  type raw_bucket
+  type raw_bucket (* = Bucket.t *)
 
   type t
 

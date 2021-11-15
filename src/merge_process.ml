@@ -13,6 +13,9 @@ The merge process is forked from the frontend. It has access to the
    nonce number. Then change the number in the control block, and
    delete the old file.
 
+FIXME maybe the merge process should read the freelist rather than
+   getting from parent?
+
 *)
 
 open Util

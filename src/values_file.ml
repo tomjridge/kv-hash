@@ -26,6 +26,10 @@ sig
      and seeking *)
 
   val list_values: t -> (string * int) list
+
+  (** NOTE this function (and the resulting sequence) uses seek on the
+     underlying [in_channel], so is not safe to use at the same time
+     as other operations *)
   val list_values_seq: t -> (string * int) Seq.t
 end
 

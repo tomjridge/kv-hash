@@ -131,14 +131,7 @@ module Reader1 = struct
     nv_map_ss   : Nv_map_ss_.t;
     (** nv_map_ss must be updated when the partition changes *)
 
-
-    (* partition : Partition_ii.t; - part of nv_map_ii *)
-
-    (* buckets   : Bucket_store0.t; - part of nv_map_ii *)
-    (* values    : Values_file.t - part of nf_map_ss  *)
   }
-
-  let max_initial_wait = 60 (* seconds *)
 
   (* When syncing, the general pattern is:
      - read ctl field to get integer value n

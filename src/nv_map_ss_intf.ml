@@ -8,8 +8,6 @@ module type S = sig
   type t
   type nv_map_ii
 
-  (* val xx_create   : ?buckets_fn:string -> ?values_fn:string -> unit -> t *)
-
   val create   : Values_file.t -> nv_map_ii -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit
