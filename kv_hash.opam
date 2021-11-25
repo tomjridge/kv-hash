@@ -11,7 +11,6 @@ depends: [
   "core"
   "xxhash"
   "ctypes"
-  "core.bigstring_unix"
   "lru"
   "extunix"
   "odoc" {with-doc}
