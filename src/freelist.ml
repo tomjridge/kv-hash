@@ -35,9 +35,13 @@ module Make_1 = struct
     ()
 
   let save (t:t) ~fn = 
-    open_out_bin fn |> fun oc -> 
-    Stdlib.output_value oc t;
-    close_out_noerr oc
+    let fn_tmp = fn ^ ".tmp" in
+    open_out_bin fn_tmp |> fun oc -> 
+    Stdlib.output_value oc t;    
+    close_out_noerr oc;
+    (* FIXME really need a sync of containing dir *)
+    Sys.rename fn_tmp fn;
+    ()
 
   let load_no_promote ~fn : t = 
     open_in_bin fn |> fun ic -> 
