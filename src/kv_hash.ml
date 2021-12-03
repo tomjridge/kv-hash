@@ -5,6 +5,11 @@
 module Log = Log
 
 
+(** {2 Log files} *)
+
+module Log_file = Log_file
+
+
 (** {2 Bucket} *)
 
 module Bucket_intf = Bucket_intf

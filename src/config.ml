@@ -20,6 +20,8 @@ module Consts = struct
 
   let const_1MiB = const_1k * const_1k
 
+  let library_name = "kv-hash"
+
 end
 open Consts
 
