@@ -173,7 +173,8 @@ module Partition_ii = struct
      more cautious approach: we use output_value for small items, and
      we ensure tail recursion *)
   let write_fn t ~fn =
-    let oc = Stdlib.open_out_bin fn in
+    let fn_tmp = fn ^ ".tmp" in
+    let oc = Stdlib.open_out_bin fn_tmp in
     let kvs = t |> to_list in
     begin
       kvs |> iter_k (fun ~k:kont kvs -> 
@@ -184,6 +185,7 @@ module Partition_ii = struct
             kont kvs)
     end |> fun () -> 
     Stdlib.close_out_noerr oc;
+    Sys.rename fn_tmp fn;
     ()
 
   let read_fn ~fn =
