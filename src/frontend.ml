@@ -390,6 +390,8 @@ module Writer_1 = struct
       | None -> ()
       | Some {pid; _} -> 
         Unix.waitpid [] pid |> fun (_pid,status) -> 
+        (* FIXME other statuses could arise if eg the subprocess was
+           killed by the OOM killer *)
         assert(status = WEXITED 0);
         ()
     end;
@@ -428,6 +430,8 @@ end
 module type WRITER = sig
   type t 
   (* FIXME following should take values, not fnames *)
+  (* FIXME prefer to create using a subdirectory completely under our
+     control, then fix pathnames upfront to avoid excessive parameterization *)
   val create   : ?max_log_len:int -> ?ctl_fn:string -> ?buckets_fn:string -> ?values_fn:string -> unit -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit

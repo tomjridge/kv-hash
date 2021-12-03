@@ -13,6 +13,6 @@
 (package 
  (name kv_hash)
  (synopsis "A Key Value store using a persistent hashtable")
- (depends core xxhash ctypes lru extunix)) ; core.bigstring_unix - a lib provided by core
+ (depends core xxhash ctypes lru extunix logs)) ; core.bigstring_unix - a lib provided by core
 
 

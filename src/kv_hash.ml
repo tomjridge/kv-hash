@@ -1,5 +1,9 @@
 (** Kv-hash, a key-value store *)
 
+(** {2 Log} *)
+
+module Log = Log
+
 
 (** {2 Bucket} *)
 

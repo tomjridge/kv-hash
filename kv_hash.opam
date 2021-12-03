@@ -13,6 +13,7 @@ depends: [
   "ctypes"
   "lru"
   "extunix"
+  "logs"
   "odoc" {with-doc}
 ]
 build: [
