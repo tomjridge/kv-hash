@@ -114,7 +114,7 @@ module Make_1(S:S) : PURE_PARTITION with type k=S.k and type r=S.r
 end
 
 
-(** Mutable partitions, with split hook *)
+(** Mutable partitions *)
 module Make_2(S:S) : PARTITION with type k=S.k and type r=S.r 
 = struct
   include S
