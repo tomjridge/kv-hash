@@ -50,7 +50,7 @@ module type LOG_FILE_W = sig
   val append: t -> string -> unit
   (** Append a string to the end of the file. *)
 
-  val flush: ?flush_ppos:bool -> t -> unit  
+  val flush: ?sync_after_ppos:bool -> t -> unit  
   (* ensure changes pushed to disk; also flush ppos if flag set, which
      is the default, although more costly *)
 
@@ -192,14 +192,12 @@ module Private = struct
       t.pos <- pos_out t.oc;
       ()  
 
-    let flush ?(flush_ppos=true) t = 
+    let flush ?(sync_after_ppos=true) t = 
       flush t.oc;
-      if flush_ppos then begin
-        seek_out t.oc ppos_ptr;
-        output_bytes t.oc (int_to_bytes t.pos);
-        flush t.oc;
-        seek_out t.oc ppos
-      end;
+      seek_out t.oc ppos_ptr;
+      output_bytes t.oc (int_to_bytes t.pos);
+      seek_out t.oc t.pos;
+      (if sync_after_ppos then flush t.oc);
       ()
 
   end
