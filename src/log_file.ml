@@ -282,7 +282,7 @@ module Private = struct
             (* create the file; use a temporary file and rename over
                original; this ensures that the reader never sees a
                part-initialized file *)
-            let oc = Stdlib.open_out_gen [Open_wronly; Open_creat; Open_trunc] perm fn_tmp in
+            let oc = Stdlib.open_out_gen [Open_wronly; Open_binary; Open_creat; Open_trunc] perm fn_tmp in
             init oc;
             close_out_noerr oc;
             (* FIXME at this point we also want to flush the dir; but
@@ -424,9 +424,10 @@ module Test(S:sig val limit : int val fn : string end) = struct
 
   (** Create log file, then write entries until limit reached *)
   let run_writer () =
-    assert(not (Sys.file_exists fn));
-    let t = Log_file_w.open_ ~create_excl:true fn |> discard_err in
+    let t = Log_file_w.open_ ~create_excl:(not (Sys.file_exists fn)) fn |> discard_err in
     let n = ref 0 in
+    (* If we exit early (eg by user pressing ctrl+c) we print the position we reached *)
+    Stdlib.at_exit (fun () -> Printf.printf "Writer reached position %d%!" !n);
     while !n < limit do
       Log_file_w.append t (string_of_int !n);
       Log_file_w.flush t;
