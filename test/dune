@@ -13,6 +13,7 @@
 ; test11: stress test frontend
 ; test12: config file format
 ; test13: test sys.time
+; test14: test Log_file (writer and reader, controlled by cmdline)
 ; test_frontend: test code for frontend.ml
 
 ; (executable
@@ -81,10 +82,17 @@
  (libraries unix))
 
 (executable
+ (name "test14") 
+ (modules test14)
+ (libraries kv_hash))
+
+
+
+(executable
  (name "test_frontend") 
  (modules test_frontend)
  (libraries kv_hash))
 
 (alias
  (name "executables")
- (deps test3.exe test4.exe test5.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe test13.exe test_frontend.exe))
+ (deps test3.exe test4.exe test5.exe test7.exe test8.exe test9.exe test10.exe test11.exe test12.exe test13.exe test14.exe test_frontend.exe))

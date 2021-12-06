@@ -52,9 +52,9 @@ module E_open = struct
       to convert to an exception *)
 
   let to_string = function
-    | `E_short s | `E_header s | `E_ppos_invalid s -> failwith s
+    | `E_exist s | `E_noent s | `E_short s | `E_header s | `E_ppos_invalid s -> failwith s
 
-  let discard_err = function
+  let discard_err : ('a,e_open) result -> 'a = function
     | Ok x -> x
     | Error e -> failwith (to_string e)
     (** Convert a [(t,e_open) result] to a t, using [failwith] for the
@@ -138,7 +138,7 @@ module Private = struct
      probably better to use the log library inbuilt functionality for
      this *)
   let log_location line = 
-    Printf.sprintf "%s %s %d:"
+    Printf.sprintf "%s %s %d"
       Config.Consts.library_name
       __FILE__
       line
@@ -157,12 +157,12 @@ module Private = struct
                    ie at beginning of data *)
 
   let int_to_bytes i = 
-    let bs = Bytes.create 4 in
+    let bs = Bytes.create 8 in
     Bytes.set_int64_be (* FIXME le? *) bs 0 (Int64.of_int i);
     bs
 
   let bytes_to_int bs =
-    assert(Bytes.length bs = 4);
+    assert(Bytes.length bs = 8);
     Bytes.get_int64_be bs 0 |> Int64.to_int
 
 
@@ -172,8 +172,8 @@ module Private = struct
     (* FIXME possible gap where log file is deleted? *)
     let ic = open_in_bin fn in
     (* check length *)
-    let ic_len = in_channel_length ic in
     begin 
+      let ic_len = in_channel_length ic in
       match ic_len >= data_ptr with
       | true -> Ok ()
       | false -> 
@@ -196,43 +196,43 @@ module Private = struct
         | false -> 
           let s = 
             Printf.sprintf "%s: file %s does not have the correct \
-                            header for a log file" 
-              (log_location __LINE__) fn 
+                            header for a log file (expected %S, got %S)" 
+              (log_location __LINE__) fn (Bytes.to_string header) (Bytes.to_string buf8)
           in
           Log.err (fun m -> m "%s" s);
           close_in_noerr ic;
           Error (`E_header s)
       end || fun () -> 
         (* check_ppos *)
-        let buf4 = Bytes.create 4 in
+        let buf8 = Bytes.create 8 in
         let ppos_ref = ref 0 in
         begin 
           assert(pos_in ic = 8);
-          really_input ic buf4 0 4;
-          let ppos = bytes_to_int buf4 in
+          really_input ic buf8 0 8;
+          let ppos = bytes_to_int buf8 in
           ppos_ref := ppos;
-          match ppos >= 16 && ppos <= ic_len with
+          let ic_len = in_channel_length ic in
+          match ppos >= data_ptr && ppos <= ic_len with
           | true -> Ok ()
           | false -> 
             let s = 
               Printf.sprintf "%s: file %s has a ppos value of %d \
                               which is beyond the length %d of the \
-                              file (or less than 16)" 
+                              file (or less than data_ptr)" 
                 (log_location __LINE__) fn ppos ic_len
             in
             Log.err (fun m -> m "%s" s);
             close_in_noerr ic;
             Error (`E_ppos_invalid s)
         end || fun () -> 
-          (* Stdlib.close_in_noerr ic; *)
+          assert(!ppos_ref >= data_ptr);
           Ok (ic,!ppos_ref)
 
 
   module type HEADER = sig val header: (*8*)bytes end
 
   module Make_w(H:HEADER) = struct
-    open H
-    let _ = assert(Bytes.length header = 8) (* to match length_ptr *)
+    let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
 
     type t = { 
       fn           : string;
@@ -244,7 +244,7 @@ module Private = struct
        perhaps we need to do everything in a tmp file *)
     let init oc = 
       seek_out oc 0;
-      output_bytes oc header;
+      output_bytes oc H.header;
       assert(pos_out oc = ppos_ptr);
       output_bytes oc (int_to_bytes data_ptr);
       assert(pos_out oc = data_ptr);
@@ -294,11 +294,14 @@ module Private = struct
           end;
           (* at this point, the file definitely exists; if it was created,
              it is in the correct format *)
-          check_format_and_return_ppos ~header fn |> function
+          check_format_and_return_ppos ~header:H.header fn |> function
           | Error e -> Error e
           | Ok (ic,ppos) -> 
+            assert(ppos >= data_ptr);
             close_in_noerr ic;
-            let oc = Stdlib.open_out fn in
+            (* FIXME not sure I like this channel interface; FIXME prefer std unix interface with really_pread etc *)
+            let oc = Stdlib.open_out_gen [Open_wronly;Open_binary] perm fn in
+            seek_out oc ppos;
             Ok { fn; oc; pos=ppos }
 
     let pos t = t.pos
@@ -306,6 +309,7 @@ module Private = struct
     let append t s = 
       (* NOTE this seek_out redundant if we maintain invariant that the
          oc pos is always equal to t.pos *)
+      assert(t.pos >= data_ptr);
       seek_out t.oc t.pos;
       output_value t.oc (s:string);
       t.pos <- pos_out t.oc;
@@ -315,8 +319,8 @@ module Private = struct
       flush t.oc;
       seek_out t.oc ppos_ptr;
       output_bytes t.oc (int_to_bytes t.pos);
-      seek_out t.oc t.pos;
       (if sync_after_ppos then flush t.oc);
+      seek_out t.oc t.pos;
       ()
 
     let close t = 
@@ -332,10 +336,9 @@ module Private = struct
 
 
   module Make_r(H:HEADER) = struct
-    open H
-    let _ = assert(Bytes.length header = 8) (* to match length_ptr *)
+    let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
 
-    type t = { ic: in_channel; mutable ppos:int; mutable buf:bytes(*4*) }
+    type t = { ic: in_channel; mutable ppos:int; mutable buf8:bytes(*8*) }
 
     let open_ ?(wait=true) fn =
       begin match Sys.file_exists fn with
@@ -359,19 +362,19 @@ module Private = struct
         (* at this point, file exists; since we use the rename trick
            to create the file from the [log_file_w], it must be
            correctly initialized *)
-        check_format_and_return_ppos ~header fn |> function
+        check_format_and_return_ppos ~header:H.header fn |> function
         | Error e -> Error e
         | Ok (ic,ppos) -> 
-          Ok { ic; ppos; buf=Bytes.create 4 }
+          Ok { ic; ppos; buf8=Bytes.create 8 }
 
     let init_pos = data_ptr
 
     let update_ppos t = 
       (* read *)
       seek_in t.ic ppos_ptr;      
-      really_input t.ic t.buf 0 4;
+      really_input t.ic t.buf8 0 8;
       (* update in t *)
-      t.ppos <- bytes_to_int t.buf;     
+      t.ppos <- bytes_to_int t.buf8;     
       ()
 
     let ppos t =
@@ -408,8 +411,43 @@ module Private = struct
 
   module Log_file_r = Make_r(Header_)  
 
-end
+end (* Private *)
 
-module Log_file_w : LOG_FILE_W with type t = Private.Log_file_w.t = Private.Log_file_w 
+module Log_file_w : LOG_FILE_W = Private.Log_file_w 
 
 module Log_file_r : LOG_FILE_R = Private.Log_file_r
+
+
+module Test(S:sig val limit : int val fn : string end) = struct
+
+  open S
+
+  (** Create log file, then write entries until limit reached *)
+  let run_writer () =
+    assert(not (Sys.file_exists fn));
+    let t = Log_file_w.open_ ~create_excl:true fn |> discard_err in
+    let n = ref 0 in
+    while !n < limit do
+      Log_file_w.append t (string_of_int !n);
+      Log_file_w.flush t;
+      incr n
+    done;
+    Log_file_w.close t;
+    ()
+
+  (** Wait for log file, then print entries, until limit reached *)
+  let run_reader () = 
+    let t = Log_file_r.open_ ~wait:true fn |> discard_err in
+    let n = ref 0 in
+    let pos = ref Log_file_r.init_pos in
+    while !n < limit do
+      if Log_file_r.can_read t ~pos then begin
+        let xs = Log_file_r.read_from t ~pos in
+        List.iter print_endline xs;
+        n:=!n + List.length xs            
+      end
+    done;
+    Log_file_r.close t;
+    ()
+      
+end
