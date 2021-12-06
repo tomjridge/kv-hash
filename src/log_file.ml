@@ -39,6 +39,8 @@ force writes to disk.
 (** Errors that can arise on opening a log file *)
 module E_open = struct
   type e_open = [
+    | `E_exist of string        (** File already exists, and we expected it did not *)
+    | `E_noent of string        (** File doesn't exist, and we didn't ask to create it *)
     | `E_short of string        (** File too short *)
     | `E_header of string       (** Incorrect file header *)
     | `E_ppos_invalid of string (** ppos points beyond end of file,
@@ -79,23 +81,157 @@ module type LOG_FILE_W = sig
   val append: t -> string -> unit
   (** Append a string to the end of the file. *)
 
+(* FIXME perhaps for future
+  val append_bytes: t -> bytes -> unit
+  (** Append a byte sequence to the end of the file. Repeatedly using
+     the same buffer to write bytes avoids excessive GC that might
+     occur when using strings. *)
+*)
+
   val flush: ?sync_after_ppos:bool -> t -> unit  
-  (** ensure changes pushed to disk (followed by an fsync); also flush
-     ppos (always) and fsync (if flag set, which is the default,
+  (** Ensure appends are pushed to disk, and then issue an fsync; then
+     flush ppos (always) and fsync (if flag set, which is the default,
      although more costly) *)
 
   val close: t -> unit
+  (** Call flush with [sync_after_ppos] set, then close output channel. *)
 
 end
 
+(** Read-only log file; NOTE we only read upto the ppos recorded on
+   disk, but there may be valid entries beyond the ppos that haven't
+   been flushed yet *)
+module type LOG_FILE_R = sig
 
+  type t
+
+  val open_: ?wait:bool -> string -> (t,e_open)result
+  (** Flag [wait] indicates that we should wait for the file to exist,
+     and be of the right size, before attempting to read; otherwise,
+     if the file is non-existent, we return with an error *)
+
+  val init_pos: int
+  (** The initial position (after the header) from which data can be read *)
+
+  val ppos: t -> int
+  (** The persistent position recorded on disk; can be changed by a
+     [log_file_w] *)
+
+  val can_read: t -> pos:int ref -> bool
+  (** If [!pos < ppos], return [true] to indicate we can read more strings *)
+
+  val read: t -> pos:int ref -> string 
+  (** Read a single entry; must have !pos <= ppos *)
+    
+  val read_from: t -> pos:int ref -> string list
+  (** Read all entries upto current ppos, as a (potentially very
+     large) list; NOTE that ppos may be updated in the meantime, in
+     which case there may be more entries to read *)
+
+  val close: t -> unit
+  
+end
 
 module Private = struct
-  
-  module type S = sig val header: (*8*)bytes end
 
-  module Make(S:S) = struct
-    open S
+  (** An initial log prefix to indicate where we are reporting from;
+     probably better to use the log library inbuilt functionality for
+     this *)
+  let log_location line = 
+    Printf.sprintf "%s %s %d:"
+      Config.Consts.library_name
+      __FILE__
+      line
+
+  (* NOTE this just makes the error handling slightly easier to
+     read: [e && fun () -> ...] is [e] if [e] is an [Error e'],
+     otherwise the result of the function *)
+  let ( || ) e f = 
+    match e with 
+    | Error e -> Error e 
+    | Ok () -> f ()
+
+  let ppos_ptr = 8
+  let data_ptr = 16
+  let ppos = 16 (* the position of ppos in memory; starts at pos 16,
+                   ie at beginning of data *)
+
+  let int_to_bytes i = 
+    let bs = Bytes.create 4 in
+    Bytes.set_int64_be (* FIXME le? *) bs 0 (Int64.of_int i);
+    bs
+
+  let bytes_to_int bs =
+    assert(Bytes.length bs = 4);
+    Bytes.get_int64_be bs 0 |> Int64.to_int
+
+
+  (* check that the fn looks correct; return the ppos *)
+  let check_format_and_return_ppos ~header fn = 
+    assert(Sys.file_exists fn);    
+    (* FIXME possible gap where log file is deleted? *)
+    let ic = open_in_bin fn in
+    (* check length *)
+    let ic_len = in_channel_length ic in
+    begin 
+      match ic_len >= data_ptr with
+      | true -> Ok ()
+      | false -> 
+        let s = 
+          Printf.sprintf "%s: file %s is less than %d bytes, and so \
+                          cannot be a log file" 
+            (log_location __LINE__) fn data_ptr
+        in
+        Log.err (fun m -> m "%s" s);
+        close_in_noerr ic;
+        Error (`E_short s)
+    end || fun () -> 
+      (* check_header *) 
+      let buf8 = Bytes.create 8 in
+      begin 
+        assert(pos_in ic = 0);
+        really_input ic buf8 0 8;
+        match buf8 = header with
+        | true -> Ok ()
+        | false -> 
+          let s = 
+            Printf.sprintf "%s: file %s does not have the correct \
+                            header for a log file" 
+              (log_location __LINE__) fn 
+          in
+          Log.err (fun m -> m "%s" s);
+          close_in_noerr ic;
+          Error (`E_header s)
+      end || fun () -> 
+        (* check_ppos *)
+        let buf4 = Bytes.create 4 in
+        let ppos_ref = ref 0 in
+        begin 
+          assert(pos_in ic = 8);
+          really_input ic buf4 0 4;
+          let ppos = bytes_to_int buf4 in
+          ppos_ref := ppos;
+          match ppos >= 16 && ppos <= ic_len with
+          | true -> Ok ()
+          | false -> 
+            let s = 
+              Printf.sprintf "%s: file %s has a ppos value of %d \
+                              which is beyond the length %d of the \
+                              file (or less than 16)" 
+                (log_location __LINE__) fn ppos ic_len
+            in
+            Log.err (fun m -> m "%s" s);
+            close_in_noerr ic;
+            Error (`E_ppos_invalid s)
+        end || fun () -> 
+          (* Stdlib.close_in_noerr ic; *)
+          Ok (ic,!ppos_ref)
+
+
+  module type HEADER = sig val header: (*8*)bytes end
+
+  module Make_w(H:HEADER) = struct
+    open H
     let _ = assert(Bytes.length header = 8) (* to match length_ptr *)
 
     type t = { 
@@ -103,20 +239,6 @@ module Private = struct
       oc           : Stdlib.out_channel; 
       mutable pos  : int
     }
-
-    let ppos_ptr = 8
-    let data_ptr = 16
-    let ppos = 16 (* the position of ppos in memory; starts at pos 16,
-                     ie at beginning of data *)
-
-    let int_to_bytes i = 
-      let bs = Bytes.create 4 in
-      Bytes.set_int64_be (* FIXME le? *) bs 0 (Int64.of_int i);
-      bs
-
-    let bytes_to_int bs =
-      assert(Bytes.length bs = 4);
-      Bytes.get_int64_be bs 0 |> Int64.to_int
 
     (* FIXME this is also problematic if we crash during init; so
        perhaps we need to do everything in a tmp file *)
@@ -128,103 +250,56 @@ module Private = struct
       assert(pos_out oc = data_ptr);
       flush oc;
       ()
-
-    (* check that the fn looks correct; return the ppos *)
-    let check_format_and_return_ppos fn = 
-      assert(Sys.file_exists fn);    
-      let ic = open_in_bin fn in
-      let ic_len = in_channel_length ic in
-      begin (* check length *)
-        match ic_len >= data_ptr with
-        | true -> Ok ()
-        | false -> 
-          let s = Printf.sprintf "%s %s: file %s is less than %d \
-                                  bytes, and so cannot be a log file" 
-              Config.Consts.library_name __MODULE__ fn data_ptr
-          in
-          Log.err (fun m -> m "%s" s);
-          Error (`E_short s)
-      end |> function | Error e -> Error e | Ok () ->      
-        let buf8 = Bytes.create 8 in
-        begin (* check_header *) 
-          assert(pos_in ic = 0);
-          really_input ic buf8 0 8;
-          match buf8 = header with
-          | true -> Ok ()
-          | false -> 
-            let s = Printf.sprintf "%s %s: file %s does not have the \
-                                    correct header for a log file" 
-                Config.Consts.library_name __MODULE__ fn 
-            in
-            Log.err (fun m -> m "%s" s);
-            Error (`E_header s)
-        end |> function | Error e -> Error e | Ok () -> 
-          let buf4 = Bytes.create 4 in
-          let ppos_ref = ref 0 in
-          begin (* check_ppos *)
-            assert(pos_in ic = 8);
-            really_input ic buf4 0 4;
-            let ppos = bytes_to_int buf4 in
-            ppos_ref := ppos;
-            match ppos >= 16 && ppos <= ic_len with
-            | true -> Ok ()
-            | false -> 
-              let s = Printf.sprintf "%s %s: file %s has a ppos value \
-                                      of %d which is beyond the length \
-                                      %d of the file (or less than 16)" 
-                  Config.Consts.library_name __MODULE__ fn ppos ic_len
-              in
-              Log.err (fun m -> m "%s" s);
-              Error (`E_ppos_invalid s)
-          end |> function | Error e -> Error e | Ok () -> 
-            Stdlib.close_in_noerr ic;
-            Ok (!ppos_ref)
-
-
+    
     let perm = 0o640 (* user rw-x; g r-wx; o -rwx *)
 
     let open_ ~create_excl fn = 
       let file_exists = Sys.file_exists fn in
       begin match create_excl && file_exists with 
         | true -> 
-          let s = Printf.sprintf "%s %s: file %s exists" 
-              Config.Consts.library_name __MODULE__ fn 
+          let s = Printf.sprintf "%s: file %s exists" 
+              (log_location __LINE__) fn 
           in
           Log.err (fun m -> m "%s" s);
-          failwith s
-        | false -> () 
-      end;
-      begin match not create_excl && not file_exists with
-        | true -> 
-          (* file doesn't exist, but we didn't try to create it *)
-          let s = Printf.sprintf "%s %s: file %s does not exist" 
-              Config.Consts.library_name __MODULE__ fn 
-          in
-          Log.err (fun m -> m "%s" s);
-          failwith s
-        | false -> () 
-      end;
-      (* at this point, if create_excl is set, then the file doesn't
-         exist; so create it *)
-      if create_excl then begin 
-        assert(not file_exists);
-        let fn_tmp = fn^".tmp" in
-        (* create the file; use a temporary file and rename over original *)
-        let oc = Stdlib.open_out_gen [Open_wronly; Open_creat; Open_trunc] perm fn_tmp in
-        init oc;
-        close_out_noerr oc;
-        (* FIXME at this point we also want to flush the dir; but OCaml
-           doesn't seem to have this functionality in stdlib *)
-        Sys.rename fn_tmp fn;
-        (* FIXME dir sync *)
-      end;
-      (* at this point, the file definitely exists; if it was created,
-         it is in the correct format *)
-      check_format_and_return_ppos fn |> function
-      | Error e -> Error e
-      | Ok ppos -> 
-        let oc = Stdlib.open_out fn in
-        Ok { fn; oc; pos=ppos }
+          Error (`E_exist s)
+        | false -> Ok () 
+      end || fun () -> 
+        begin match not create_excl && not file_exists with
+          | true -> 
+            (* file doesn't exist, and we didn't try to create it *)
+            let s = Printf.sprintf "%s: file %s does not exist" 
+                (log_location __LINE__) fn 
+            in
+            Log.err (fun m -> m "%s" s);
+            Error (`E_noent s)
+          | false -> Ok () 
+        end || fun () -> 
+          (* at this point, if create_excl is set, then the file doesn't
+             exist; so create it *)
+          if create_excl then begin 
+            assert(not file_exists);
+            let fn_tmp = fn^".tmp" in
+            (* create the file; use a temporary file and rename over
+               original; this ensures that the reader never sees a
+               part-initialized file *)
+            let oc = Stdlib.open_out_gen [Open_wronly; Open_creat; Open_trunc] perm fn_tmp in
+            init oc;
+            close_out_noerr oc;
+            (* FIXME at this point we also want to flush the dir; but
+               OCaml doesn't seem to have this functionality in stdlib,
+               unless we actually open an fd on the dir itself and fsync
+               that *)
+            Sys.rename fn_tmp fn;
+            (* FIXME dir sync *)
+          end;
+          (* at this point, the file definitely exists; if it was created,
+             it is in the correct format *)
+          check_format_and_return_ppos ~header fn |> function
+          | Error e -> Error e
+          | Ok (ic,ppos) -> 
+            close_in_noerr ic;
+            let oc = Stdlib.open_out fn in
+            Ok { fn; oc; pos=ppos }
 
     let pos t = t.pos
 
@@ -232,7 +307,7 @@ module Private = struct
       (* NOTE this seek_out redundant if we maintain invariant that the
          oc pos is always equal to t.pos *)
       seek_out t.oc t.pos;
-      output_string t.oc s;
+      output_value t.oc (s:string);
       t.pos <- pos_out t.oc;
       ()  
 
@@ -251,8 +326,90 @@ module Private = struct
 
   end
 
-  module Log_file_w = Make(struct let header = "log_file" |> Bytes.of_string end)
+  module Header_ = struct let header = "log_file" |> Bytes.of_string end
+
+  module Log_file_w = Make_w(Header_)
+
+
+  module Make_r(H:HEADER) = struct
+    open H
+    let _ = assert(Bytes.length header = 8) (* to match length_ptr *)
+
+    type t = { ic: in_channel; mutable ppos:int; mutable buf:bytes(*4*) }
+
+    let open_ ?(wait=true) fn =
+      begin match Sys.file_exists fn with
+      | false -> (
+          match wait with 
+          | false -> 
+            (* file doesn't exist *)
+            let s = Printf.sprintf "%s: file %s does not exist" 
+                (log_location __LINE__) fn 
+            in
+            Log.err (fun m -> m "%s" s);
+            Error (`E_noent s)
+          | true -> 
+            while not (Sys.file_exists fn) do
+              Log.info (fun m -> m "Waiting 1s for file %s to be created." fn);
+              Thread.delay 1.0
+            done;
+            Ok ())
+      | true -> Ok ()
+      end || fun () -> 
+        (* at this point, file exists; since we use the rename trick
+           to create the file from the [log_file_w], it must be
+           correctly initialized *)
+        check_format_and_return_ppos ~header fn |> function
+        | Error e -> Error e
+        | Ok (ic,ppos) -> 
+          Ok { ic; ppos; buf=Bytes.create 4 }
+
+    let init_pos = data_ptr
+
+    let update_ppos t = 
+      (* read *)
+      seek_in t.ic ppos_ptr;      
+      really_input t.ic t.buf 0 4;
+      (* update in t *)
+      t.ppos <- bytes_to_int t.buf;     
+      ()
+
+    let ppos t =
+      update_ppos t;
+      t.ppos
+      
+    let can_read t ~pos = 
+      update_ppos t;
+      !pos < t.ppos 
+
+    let read t ~pos =
+      assert(can_read t ~pos);
+      seek_in t.ic !pos;
+      let s : string = input_value t.ic in
+      pos := pos_in t.ic;
+      s
+
+    let read_from t ~pos =
+      update_ppos t;
+      let ppos = t.ppos in
+      [] |> Util.iter_k (fun ~k xs -> 
+          match !pos < ppos with
+          | false -> List.rev xs
+          | true -> 
+            read t ~pos |> fun x ->
+            k (x::xs))
+    (* NOTE on-disk ppos may be updated in the meantime *)
+
+    let close t = 
+      close_in_noerr t.ic;
+      ()
+        
+  end
+
+  module Log_file_r = Make_r(Header_)  
+
 end
 
 module Log_file_w : LOG_FILE_W with type t = Private.Log_file_w.t = Private.Log_file_w 
 
+module Log_file_r : LOG_FILE_R = Private.Log_file_r
