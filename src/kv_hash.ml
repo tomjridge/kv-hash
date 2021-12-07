@@ -1,11 +1,11 @@
 (** Kv-hash, a key-value store *)
 
-(** {2 Log} *)
+(** {2 Log (library diagnostic messages)} *)
 
 module Log = Log
 
 
-(** {2 Log files} *)
+(** {2 Log file (safely appendable data files)} *)
 
 module Log_file = Log_file
 

@@ -157,7 +157,7 @@ It is worth noting that the merge could be carried out by multiple processes, ea
 In order to keep all processes coordinated, we maintain a control file, which consists of several integers.
 
 * The current "generation"; the generation is changed every time we move to a new log file; the log file is named "log_nnnn", where nnnn is the generation number.
-* The most recent partition number; the partition is stored in a file "part_mmmm" where mmmm is the most recent partition number. FIXME perhaps we just store this in "part_nnnn" and rename from previous when not changed?
+* The most recent partition number; the partition is stored in a file "part_nnnn" where nnnn is the most recent partition number. FIXME perhaps we just store this in "part_nnnn" where nnnn is the latest generation, and rename from previous when not changed?
 
 In addition, the lookaside table is stored under filename "lookaside_nnnn", where nnnn is the current generation. FIXME TODO
 
@@ -168,10 +168,51 @@ In addition, the lookaside table is stored under filename "lookaside_nnnn", wher
 In the standard configuration, we have the following files:
 
 * buckets.data - the potentially huge store of buckets
-* part_mmmm - a partition
+* part_nnnn - a partition
 * log_nnnn - a frontend log file, prior to being merged
+* freelist_nnnn - the freelist
 * values.data - the values file (string values are converted to offsets in this file)
 * ctl.data - the control file
+
+
+
+## Recovery after a crash
+
+The code should provide crash consistency. Various technologies are employed:
+
+* The "rename trick" - writing data to a `file.tmp` and then renaming to `file`; for this to work correctly, we need to flush `file.tmp`; flush the containing directory; perform the rename; then flush the containing directory again.
+* The module `Log_file` contains an implementation of a crash-safe append-only file.
+* Block-sized, block-aligned writes are assumed to commit to disk atomically (but not necessarily in order).
+
+For the various files involved, we describe the technologies used to ensure crash consistency:
+
+* buckets.data: only updated using blk-aligned blk-sized writes
+* values.data: should use `Log_file` to safely append
+* ctl.data: after initial creation (which should use the rename trick to safely initialize), only the first block in the file is ever updated (the ctl fits within 1 block)
+* part_nnnn: rename trick
+* log_nnnn: uses `Log_file`
+* freelist_nnnn: rename trick
+
+The sequence of events when recovering looks as follows:
+
+1. All `.tmp` temporary files are deleted (they were created before the crash when attempting to use the rename trick)
+2. The bucket store can be opened directly.
+3. The freelist can be read from the last saved version.
+4. The partition can be read from the last saved version.
+5. The values file can be opened via `Log_file`
+6. The various log_nnnn files can be opened via `Log_file`
+
+Once ctl.data exists, it is guaranteed that:
+
+1. buckets.data exists
+2. values.data exists
+3. part_nnnn exists
+4. log_nnnn and the previous log (if any) exist
+5. freelist_nnnn exists FIXME check this
+
+Thus, once ctl.data exists, then all the files we need to recover after a crash will exist and will correctly represent a consistent state just before the crash.
+
+The system assumes it has complete control over the directory where it stores its files. It may be that some file is accidentally deleted by the user, outside the control of the system. The system should detect this and issue a warning, then fail to start. If a user modifies one of the internal files (say, buckets.data, or values.data, or one of the log files) then all bets are off, since the system relies on the data held in these files being the data that was previously written.
 
 
 

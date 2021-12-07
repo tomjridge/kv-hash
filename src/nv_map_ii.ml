@@ -9,20 +9,6 @@ open Nv_map_ii_intf
 
 module Partition_ii = Partition.Partition_ii
 
-(*
-module Create_opts = struct
-
-  (* FIXME add min_free_blk to partition *)
-
-  (* f - file; i - int; p - partition *)
-  type t = 
-    | O_ff of { bucket_fn:string; partition_fn:string }
-    | O_fi of { bucket_fn:string; partition_n:int }
-    | O_fp of { bucket_fn:string; partition:Partition_ii.t }
-end
-*)
-
-
 module Util_ = struct
   (** Create an initial n-way partition, with values provided by alloc *)
   let initial_partitioning ~alloc ~n = 

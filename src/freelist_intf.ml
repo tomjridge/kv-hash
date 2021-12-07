@@ -29,6 +29,7 @@ module type FREELIST = sig
   val alloc  : t -> int
   val free   : t -> int -> unit
   val save   : t -> fn:string -> unit
+  (** NOTE save will use a temporary file to write out, then rename to the target *)
 
   (** Debugging: load a freelist, but don't promote newly free buckets *)
   val load_no_promote          : fn:string -> t
