@@ -226,7 +226,67 @@ module Private = struct
           Ok (!ppos_ref)
 
 
+  let perm = 0o640 (* user rw-x; g r-wx; o -rwx *)
+      
+  let init_pos = data_ptr
+
+  let len_65536 = 65536
+
   module type HEADER = sig val header: (*8*)bytes end
+
+  module Marshal = struct end (* make sure we don't use stdlib Marshal *)
+
+  module Marshal_ = struct
+
+    let max_string_len = Int32.(max_int |> to_int)
+
+    (** Marshal a string to a buffer; first four bytes is string
+       length; rest is the string; string length must be representable
+       as an int32; use buf if possible, otherwise create a new buf
+       and return that; alsways use the returned buf (don't rely on
+       the argument buf being used); returned buf from 0 to |s|+4
+       contains the encoded bytes; NOTE inefficient for short strings,
+       since we need 4 bytes to encode the length; could be improved
+       FIXME? by using a bin_prot like encoding of strings *)
+    let output_string ~buf s = 
+      let len = String.length s in      
+      assert(len <= max_string_len);
+      let buf = 
+        match len+4 <= Bytes.length buf with
+        | true -> buf
+        | false -> Bytes.create (len+4)
+      in
+      BytesLabels.set_int32_be buf 0 (Int32.of_int len);
+      BytesLabels.blit_string ~src:s ~src_pos:0 ~dst:buf ~dst_pos:4 ~len;
+      buf (* NOTE valid bytes are from 0 to |s|+4 *)
+
+    let output_string_fd ~fd ~off ~buf s =
+      let buf = output_string ~buf s in
+      let len = String.length s +4 in
+      ignore(Unixfile.pwrite_all ~fd ~off ~buf ~buf_off:0 ~len : int);
+      len
+
+    (** buf is a buffer that will be used to hold the string while
+       decoding (if the buffer is big enough; otherwise we create a
+       new buffer); buf must have length at least 4 *)
+    let input_string_fd ~fd ~off ~buf =
+      let len_buf = Bytes.length buf in
+      assert(len_buf >= 4);
+      ignore(Unixfile.pread_all ~fd ~off ~buf ~buf_off:0 ~len:4 : int);
+      let len = Bytes.get_int32_be buf 0 |> Int32.to_int in
+      let buf = 
+        match len <= len_buf with
+        | true -> buf
+        | false -> Bytes.create len
+      in
+      ignore(Unixfile.pread_all ~fd ~off:(off+4) ~buf ~buf_off:0 ~len : int);
+      let s = Bytes.to_string (BytesLabels.sub buf ~pos:0 ~len) in
+      s
+
+    (** After reading a string from pos, return the next possible pos *)
+    let next_off_delta s = 4 + String.length s
+      
+  end
 
   module Make_w(H:HEADER) = struct
 
@@ -235,7 +295,10 @@ module Private = struct
     type t = { 
       fn          : string;
       fd          : Unix.file_descr; 
-      mutable pos : int
+      mutable pos : int;
+      (** Position at end of the file, where we append new data. *)
+      buf         : bytes;  
+      (** Buffer for storing marshalled values before writing to file *)
     }
 
     let write_header fd =
@@ -249,12 +312,10 @@ module Private = struct
        perhaps we need to do everything in a tmp file *)
     let init fd = 
       write_header fd;
-      write_ppos ~fd ~ppos:data_ptr; (* initial ppos is data_ptr *)
+      write_ppos ~fd ~ppos:init_pos; (* initial ppos is init_pos = data_ptr *)
       Unixfile.fsync fd;
       ()
     
-    let perm = 0o640 (* user rw-x; g r-wx; o -rwx *)
-
     let open_ ~create_excl fn = 
       let file_exists = Sys.file_exists fn in
       begin match create_excl && file_exists with 
@@ -307,26 +368,21 @@ module Private = struct
           | Error e -> Error e
           | Ok ppos -> 
             assert(ppos >= data_ptr);
-            Ok { fn; fd; pos=ppos }
+            Ok { fn; fd; pos=ppos; buf=Bytes.create len_65536 }
 
     let pos t = t.pos
-
-    let buf_len = 65536
-    let buf = Bytes.create buf_len 
     
     let append t s = 
       (* NOTE this seek_out redundant if we maintain invariant that the
          oc pos is always equal to t.pos *)
-      assert(pos t >= data_ptr);
-      let len = Marshal.to_buffer buf 0 buf_len s [] in
-      assert(Unixfile.pwrite_all ~fd:t.fd ~off:(pos t) ~buf ~buf_off:0 ~len = len);
+      assert(t.pos >= data_ptr);
+      let len = Marshal_.output_string_fd ~fd:t.fd ~off:t.pos ~buf:t.buf s in
       t.pos <- t.pos + len;
       ()  
 
     let flush ?(sync_after_ppos=true) t = 
       Unixfile.fsync t.fd;
-      let len = Unixfile.pwrite_all ~fd:t.fd ~off:ppos_ptr ~buf:(int_to_bytes t.pos) ~buf_off:0 ~len:len8 in
-      assert(len=len8);
+      ignore (Unixfile.pwrite_all ~fd:t.fd ~off:ppos_ptr ~buf:(int_to_bytes t.pos) ~buf_off:0 ~len:len8);
       (if sync_after_ppos then Unixfile.fsync t.fd);      
       ()
 
@@ -338,11 +394,16 @@ module Private = struct
 
   module Log_file_w = Make_w(Header_)
 
-(*
   module Make_r(H:HEADER) = struct
     let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
 
-    type t = { ic: in_channel; mutable ppos:int; mutable buf8:bytes(*8*) }
+    type t = { 
+      fd           : Unix.file_descr; 
+      mutable ppos : int; 
+      (** Last ppos read from disk *)
+      buf8         : bytes(*8*);
+      buf          : bytes;
+    }
 
     let open_ ?(wait=true) fn =
       begin match Sys.file_exists fn with
@@ -366,17 +427,17 @@ module Private = struct
         (* at this point, file exists; since we use the rename trick
            to create the file from the [log_file_w], it must be
            correctly initialized *)
-        check_format_and_return_ppos ~header:H.header fn |> function
+        let fd = Unix.(openfile fn [O_RDONLY] perm) in
+        check_format_and_return_ppos ~header:H.header ~fn ~fd |> function
         | Error e -> Error e
-        | Ok (ic,ppos) -> 
-          Ok { ic; ppos; buf8=Bytes.create 8 }
+        | Ok ppos -> 
+          Ok { fd; ppos; buf8=Bytes.create 8; buf=Bytes.create len_65536 }
 
-    let init_pos = data_ptr
+    let init_pos = init_pos
 
     let update_ppos t = 
       (* read *)
-      seek_in t.ic ppos_ptr;      
-      really_input t.ic t.buf8 0 8;
+      ignore(Unixfile.pread_all ~fd:t.fd ~off:ppos_ptr ~buf:t.buf8 ~buf_off:0 ~len:len8);
       (* update in t *)
       t.ppos <- bytes_to_int t.buf8;     
       ()
@@ -391,9 +452,13 @@ module Private = struct
 
     let read t ~pos =
       assert(can_read t ~pos);
-      seek_in t.ic !pos;
-      let s : string = input_value t.ic in
-      pos := pos_in t.ic;
+      (* the problem is how to marshal from an fd, when we don't know
+         the length; this is covered in the Marshal module via
+         header_size, data_size etc; given the complexity, it makes
+         sense to just implement our own marshal here *)
+      let s = Marshal_.input_string_fd ~fd:t.fd ~off:!pos ~buf:t.buf in
+      let delta = Marshal_.next_off_delta s in
+      pos := !pos + delta;
       s
 
     let read_from t ~pos =
@@ -407,20 +472,16 @@ module Private = struct
             k (x::xs))
     (* NOTE on-disk ppos may be updated in the meantime *)
 
-    let close t = 
-      close_in_noerr t.ic;
-      ()
+    let close t = Unixfile.close_noerr t.fd
         
   end
 
   module Log_file_r = Make_r(Header_)  
-*)
 
 end (* Private *)
 
 module Log_file_w : LOG_FILE_W = Private.Log_file_w 
 
-(*
 module Log_file_r : LOG_FILE_R = Private.Log_file_r
 
 
@@ -458,4 +519,3 @@ module Test(S:sig val limit : int val fn : string end) = struct
     ()
       
 end
-*)
