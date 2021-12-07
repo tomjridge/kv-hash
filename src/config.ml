@@ -22,6 +22,12 @@ module Consts = struct
 
   let library_name = "kv-hash"
 
+  let ctl_fn                       = "ctl.data"
+  let values_fn                    = "values.data"
+  let buckets_fn                   = "buckets.data"
+  let partition_fn                 = "partition.data"
+  (* let freelist_fn                  = "freelist.data" *)
+
 end
 open Consts
 
@@ -38,11 +44,6 @@ module T = struct
     blk_sz                       : int;
     bucket_sorted                : int;
     bucket_unsorted              : int;
-    ctl_fn                       : string;
-    values_fn                    : string;
-    buckets_fn                   : string;
-    partition_fn                 : string;
-    freelist_fn                  : string;
   }[@@deriving sexp]
 end
 include T
@@ -56,11 +57,6 @@ let default_config = {
   blk_sz                       = 4096;
   bucket_sorted                = 245;
   bucket_unsorted              = 10;
-  ctl_fn                       = "ctl.data";
-  values_fn                    = "values.data";
-  buckets_fn                   = "buckets.data";  
-  partition_fn                 = "partition.data";
-  freelist_fn                  = "freelist.data";
 }
 
 let read ~fn = Sexplib.Sexp.load_sexp fn |> config_of_sexp

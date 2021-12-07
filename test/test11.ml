@@ -12,8 +12,7 @@ let lim = 1_000_000_000 (* ie, "forever" *)
 
 let _ = 
   Printf.printf "%s: test starts\n%!" __MODULE__;
-  let t = Writer.create 
-      ~max_log_len ~ctl_fn:"ctl" ~buckets_fn:"buckets" ~values_fn:"values" () 
+  let t = Writer.create ~max_log_len () 
   in
   begin
     0 |> iter_k (fun ~k:kont i -> 

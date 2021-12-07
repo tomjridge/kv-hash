@@ -264,9 +264,6 @@ module Reader1 = struct
         | false -> retry ())
 
   let open_ 
-      ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
-      ?values_fn:(values_fn=Config.config.values_fn)
       ()
     =
     (* NOTE existence of ctl is taken to indicate that the other

@@ -7,9 +7,7 @@ module Test() = struct
 
   let _ = 
     Printf.printf "%s: test starts\n%!" __MODULE__;
-    let t = Writer.create 
-        ~max_log_len:32_000_000 ~ctl_fn:"ctl" ~buckets_fn:"buckets" ~values_fn:"values" () 
-    in
+    let t = Writer.create ~max_log_len:32_000_000 () in
     begin
       0 |> iter_k (fun ~k:kont i -> 
           match i < lim with

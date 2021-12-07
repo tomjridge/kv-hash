@@ -192,9 +192,6 @@ module Writer_1 = struct
 
   let create 
       ?max_log_len:(max_log_len=Config.config.max_log_length) 
-      ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
-      ?values_fn:(values_fn=Config.config.values_fn)
       () 
     = 
     let ctl = Control.create ~fn:ctl_fn in
@@ -235,9 +232,6 @@ module Writer_1 = struct
 
   let open_ 
       ?max_log_len:(max_log_len=Config.config.max_log_length) 
-      ?ctl_fn:(ctl_fn=Config.config.ctl_fn)
-      ?buckets_fn:(buckets_fn=Config.config.buckets_fn)
-      ?values_fn:(values_fn=Config.config.values_fn)
       () 
     =
     (* get current log and part from the ctl file *)
@@ -432,7 +426,7 @@ module type WRITER = sig
   (* FIXME following should take values, not fnames *)
   (* FIXME prefer to create using a subdirectory completely under our
      control, then fix pathnames upfront to avoid excessive parameterization *)
-  val create   : ?max_log_len:int -> ?ctl_fn:string -> ?buckets_fn:string -> ?values_fn:string -> unit -> t
+  val create   : ?max_log_len:int -> unit -> t
   val find_opt : t -> string -> string option
   val insert   : t -> string -> string -> unit
   val delete   : t -> string -> unit
