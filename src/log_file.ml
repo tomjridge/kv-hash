@@ -146,7 +146,7 @@ module Private = struct
   (* NOTE this just makes the error handling slightly easier to
      read: [e && fun () -> ...] is [e] if [e] is an [Error e'],
      otherwise the result of the function *)
-  let ( || ) e f = 
+  let ( ||| ) e f = 
     match e with 
     | Error e -> Error e 
     | Ok () -> f ()
@@ -155,6 +155,8 @@ module Private = struct
   let data_ptr = 16
   let ppos = 16 (* the position of ppos in memory; starts at pos 16,
                    ie at beginning of data *)
+
+  let _ = assert(Sys.int_size = 8 || failwith "Need 64bit platform")
 
   let int_to_bytes i = 
     let bs = Bytes.create 8 in
@@ -165,16 +167,14 @@ module Private = struct
     assert(Bytes.length bs = 8);
     Bytes.get_int64_be bs 0 |> Int64.to_int
 
+  let len8 = 8
 
   (* check that the fn looks correct; return the ppos *)
-  let check_format_and_return_ppos ~header fn = 
-    assert(Sys.file_exists fn);    
-    (* FIXME possible gap where log file is deleted? *)
-    let ic = open_in_bin fn in
+  let check_format_and_return_ppos ~header ~fn ~fd = 
     (* check length *)
+    let fd_len = Unixfile.fstat_size fd in
     begin 
-      let ic_len = in_channel_length ic in
-      match ic_len >= data_ptr with
+      match fd_len >= data_ptr with
       | true -> Ok ()
       | false -> 
         let s = 
@@ -183,14 +183,13 @@ module Private = struct
             (log_location __LINE__) fn data_ptr
         in
         Log.err (fun m -> m "%s" s);
-        close_in_noerr ic;
+        Unixfile.close_noerr fd;
         Error (`E_short s)
-    end || fun () -> 
+    end ||| fun () -> 
       (* check_header *) 
-      let buf8 = Bytes.create 8 in
+      let buf8 = Bytes.create len8 in
       begin 
-        assert(pos_in ic = 0);
-        really_input ic buf8 0 8;
+        ignore(Unixfile.pread_all ~fd ~off:0 ~buf:buf8 ~buf_off:0 ~len:len8);
         match buf8 = header with
         | true -> Ok ()
         | false -> 
@@ -200,55 +199,58 @@ module Private = struct
               (log_location __LINE__) fn (Bytes.to_string header) (Bytes.to_string buf8)
           in
           Log.err (fun m -> m "%s" s);
-          close_in_noerr ic;
+          Unixfile.close_noerr fd;
           Error (`E_header s)
-      end || fun () -> 
+      end ||| fun () -> 
         (* check_ppos *)
-        let buf8 = Bytes.create 8 in
+        let buf8 = Bytes.create len8 in
         let ppos_ref = ref 0 in
         begin 
-          assert(pos_in ic = 8);
-          really_input ic buf8 0 8;
+          ignore(Unixfile.pread_all ~fd ~off:ppos_ptr ~buf:buf8 ~buf_off:0 ~len:len8);          
           let ppos = bytes_to_int buf8 in
           ppos_ref := ppos;
-          let ic_len = in_channel_length ic in
-          match ppos >= data_ptr && ppos <= ic_len with
+          match ppos >= data_ptr && ppos <= fd_len with
           | true -> Ok ()
           | false -> 
             let s = 
               Printf.sprintf "%s: file %s has a ppos value of %d \
                               which is beyond the length %d of the \
                               file (or less than data_ptr)" 
-                (log_location __LINE__) fn ppos ic_len
+                (log_location __LINE__) fn ppos fd_len
             in
             Log.err (fun m -> m "%s" s);
-            close_in_noerr ic;
+            Unixfile.close_noerr fd;
             Error (`E_ppos_invalid s)
-        end || fun () -> 
+        end ||| fun () -> 
           assert(!ppos_ref >= data_ptr);
-          Ok (ic,!ppos_ref)
+          Ok (!ppos_ref)
 
 
   module type HEADER = sig val header: (*8*)bytes end
 
   module Make_w(H:HEADER) = struct
-    let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
+
+    let _ = assert(Bytes.length H.header = len8) (* to match length_ptr *)
 
     type t = { 
-      fn           : string;
-      oc           : Stdlib.out_channel; 
-      mutable pos  : int
+      fn          : string;
+      fd          : Unix.file_descr; 
+      mutable pos : int
     }
+
+    let write_header fd =
+      ignore(Unixfile.pwrite_all ~fd ~off:0 ~buf:H.header ~buf_off:0 ~len:len8)
+
+    let write_ppos ~fd ~ppos =
+      ignore(Unixfile.pwrite_all ~fd ~off:ppos_ptr ~buf:(int_to_bytes ppos) ~buf_off:0 ~len:len8)
+
 
     (* FIXME this is also problematic if we crash during init; so
        perhaps we need to do everything in a tmp file *)
-    let init oc = 
-      seek_out oc 0;
-      output_bytes oc H.header;
-      assert(pos_out oc = ppos_ptr);
-      output_bytes oc (int_to_bytes data_ptr);
-      assert(pos_out oc = data_ptr);
-      flush oc;
+    let init fd = 
+      write_header fd;
+      write_ppos ~fd ~ppos:data_ptr; (* initial ppos is data_ptr *)
+      Unixfile.fsync fd;
       ()
     
     let perm = 0o640 (* user rw-x; g r-wx; o -rwx *)
@@ -263,7 +265,7 @@ module Private = struct
           Log.err (fun m -> m "%s" s);
           Error (`E_exist s)
         | false -> Ok () 
-      end || fun () -> 
+      end ||| fun () -> 
         begin match not create_excl && not file_exists with
           | true -> 
             (* file doesn't exist, and we didn't try to create it *)
@@ -273,60 +275,62 @@ module Private = struct
             Log.err (fun m -> m "%s" s);
             Error (`E_noent s)
           | false -> Ok () 
-        end || fun () -> 
+        end ||| fun () -> 
           (* at this point, if create_excl is set, then the file doesn't
              exist; so create it *)
-          if create_excl then begin 
-            assert(not file_exists);
-            let fn_tmp = fn^".tmp" in
-            (* create the file; use a temporary file and rename over
-               original; this ensures that the reader never sees a
-               part-initialized file *)
-            let oc = Stdlib.open_out_gen [Open_wronly; Open_binary; Open_creat; Open_trunc] perm fn_tmp in
-            init oc;
-            close_out_noerr oc;
-            (* FIXME at this point we also want to flush the dir; but
-               OCaml doesn't seem to have this functionality in stdlib,
-               unless we actually open an fd on the dir itself and fsync
-               that *)
-            Sys.rename fn_tmp fn;
-            (* FIXME dir sync *)
-          end;
+          let fn_tmp = fn^".tmp" in
+          let fd = 
+            match create_excl with
+            | true -> begin 
+                assert(not file_exists);
+                (* create the file; use a temporary file and rename over
+                   original; this ensures that the reader never sees a
+                   part-initialized file *)
+                let fd = Unix.(openfile fn_tmp [O_WRONLY; O_CREAT; O_EXCL] perm) in
+                init fd;
+                Unixfile.close_noerr fd;
+                (* FIXME at this point we also want to flush the dir; but
+                   OCaml doesn't seem to have this functionality in stdlib,
+                   unless we actually open an fd on the dir itself and fsync
+                   that *)
+                Sys.rename fn_tmp fn;
+                (* FIXME dir sync *)
+                fd
+              end
+            | false -> 
+              let fd = Unix.(openfile fn_tmp [O_WRONLY] perm) in
+              fd
+          in
           (* at this point, the file definitely exists; if it was created,
-             it is in the correct format *)
-          check_format_and_return_ppos ~header:H.header fn |> function
+             it is in the correct format FIXME pass fd from prev *)
+          check_format_and_return_ppos ~header:H.header ~fn ~fd |> function
           | Error e -> Error e
-          | Ok (ic,ppos) -> 
+          | Ok ppos -> 
             assert(ppos >= data_ptr);
-            close_in_noerr ic;
-            (* FIXME not sure I like this channel interface; FIXME prefer std unix interface with really_pread etc *)
-            let oc = Stdlib.open_out_gen [Open_wronly;Open_binary] perm fn in
-            seek_out oc ppos;
-            Ok { fn; oc; pos=ppos }
+            Ok { fn; fd; pos=ppos }
 
     let pos t = t.pos
 
+    let buf_len = 65536
+    let buf = Bytes.create buf_len 
+    
     let append t s = 
       (* NOTE this seek_out redundant if we maintain invariant that the
          oc pos is always equal to t.pos *)
-      assert(t.pos >= data_ptr);
-      seek_out t.oc t.pos;
-      output_value t.oc (s:string);
-      t.pos <- pos_out t.oc;
+      assert(pos t >= data_ptr);
+      let len = Marshal.to_buffer buf 0 buf_len s [] in
+      assert(Unixfile.pwrite_all ~fd:t.fd ~off:(pos t) ~buf ~buf_off:0 ~len = len);
+      t.pos <- t.pos + len;
       ()  
 
     let flush ?(sync_after_ppos=true) t = 
-      flush t.oc;
-      seek_out t.oc ppos_ptr;
-      output_bytes t.oc (int_to_bytes t.pos);
-      (if sync_after_ppos then flush t.oc);
-      seek_out t.oc t.pos;
+      Unixfile.fsync t.fd;
+      let len = Unixfile.pwrite_all ~fd:t.fd ~off:ppos_ptr ~buf:(int_to_bytes t.pos) ~buf_off:0 ~len:len8 in
+      assert(len=len8);
+      (if sync_after_ppos then Unixfile.fsync t.fd);      
       ()
 
-    let close t = 
-      flush t;
-      close_out_noerr t.oc;
-      ()
+    let close t = Unixfile.close_noerr t.fd
 
   end
 
@@ -334,7 +338,7 @@ module Private = struct
 
   module Log_file_w = Make_w(Header_)
 
-
+(*
   module Make_r(H:HEADER) = struct
     let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
 
@@ -358,7 +362,7 @@ module Private = struct
             done;
             Ok ())
       | true -> Ok ()
-      end || fun () -> 
+      end ||| fun () -> 
         (* at this point, file exists; since we use the rename trick
            to create the file from the [log_file_w], it must be
            correctly initialized *)
@@ -410,11 +414,13 @@ module Private = struct
   end
 
   module Log_file_r = Make_r(Header_)  
+*)
 
 end (* Private *)
 
 module Log_file_w : LOG_FILE_W = Private.Log_file_w 
 
+(*
 module Log_file_r : LOG_FILE_R = Private.Log_file_r
 
 
@@ -452,3 +458,4 @@ module Test(S:sig val limit : int val fn : string end) = struct
     ()
       
 end
+*)
