@@ -1,9 +1,9 @@
 (** Support for append-only log files, with header field containing
-    synced length, and fsync used to ensure crash-resistance. 
+    synced length, and fsync used to ensure crash-resistance.
 
 The problem we try to address are outlined here: https://tom-ridge.blogspot.com/2021/11/how-to-safely-append-to-file-can-we.html
 
-We have a file format as follows: 
+We have a file format as follows:
 {v
 +------------------------------------------------+
 | Header id | Ppos   | Data... | Pending data... |
@@ -21,7 +21,7 @@ flushed. The scenario we need to avoid is:
   - (no fsync)
   - update ppos
 
-The danger is that the update of ppos might occur before the append of the data. 
+The danger is that the update of ppos might occur before the append of the data.
 
 On the other hand, issuing an fsync after each append may give poor performance.
 
@@ -75,7 +75,7 @@ module type LOG_FILE_W = sig
      doesn't exist, and fail if the file does exist; use {!
      E_open.discard_err } to eliminate the error result type. *)
 
-  val pos: t -> int  
+  val pos: t -> int
   (** The position at which the next append will occur. *)
 
   val append: t -> string -> unit
@@ -88,7 +88,7 @@ module type LOG_FILE_W = sig
      occur when using strings. *)
 *)
 
-  val flush: ?sync_after_ppos:bool -> t -> unit  
+  val flush: ?sync_after_ppos:bool -> t -> unit
   (** Ensure appends are pushed to disk, and then issue an fsync; then
      flush ppos (always) and fsync (if flag set, which is the default,
      although more costly) *)
@@ -120,16 +120,16 @@ module type LOG_FILE_R = sig
   val can_read: t -> pos:int ref -> bool
   (** If [!pos < ppos], return [true] to indicate we can read more strings *)
 
-  val read: t -> pos:int ref -> string 
+  val read: t -> pos:int ref -> string
   (** Read a single entry; must have !pos <= ppos *)
-    
+
   val read_from: t -> pos:int ref -> string list
   (** Read all entries upto current ppos, as a (potentially very
      large) list; NOTE that ppos may be updated in the meantime, in
      which case there may be more entries to read *)
 
   val close: t -> unit
-  
+
 end
 
 module Private = struct
@@ -137,7 +137,7 @@ module Private = struct
   (** An initial log prefix to indicate where we are reporting from;
      probably better to use the log library inbuilt functionality for
      this *)
-  let log_location line = 
+  let log_location line =
     Printf.sprintf "%s %s %d"
       Config.Consts.library_name
       __FILE__
@@ -146,9 +146,9 @@ module Private = struct
   (* NOTE this just makes the error handling slightly easier to
      read: [e && fun () -> ...] is [e] if [e] is an [Error e'],
      otherwise the result of the function *)
-  let ( ||| ) e f = 
-    match e with 
-    | Error e -> Error e 
+  let ( ||| ) e f =
+    match e with
+    | Error e -> Error e
     | Ok () -> f ()
 
   let ppos_ptr = 8
@@ -158,7 +158,7 @@ module Private = struct
 
   let _ = assert(Sys.word_size = 64 || failwith "Need 64bit platform")
 
-  let int_to_bytes i = 
+  let int_to_bytes i =
     let bs = Bytes.create 8 in
     Bytes.set_int64_be (* FIXME le? *) bs 0 (Int64.of_int i);
     bs
@@ -170,64 +170,64 @@ module Private = struct
   let len8 = 8
 
   (* check that the fn looks correct; return the ppos *)
-  let check_format_and_return_ppos ~header ~fn ~fd = 
+  let check_format_and_return_ppos ~header ~fn ~fd =
     (* check length *)
     let fd_len = Unixfile.fstat_size fd in
-    begin 
+    begin
       match fd_len >= data_ptr with
       | true -> Ok ()
-      | false -> 
-        let s = 
+      | false ->
+        let s =
           Printf.sprintf "%s: file %s is less than %d bytes, and so \
-                          cannot be a log file" 
+                          cannot be a log file"
             (log_location __LINE__) fn data_ptr
         in
         Log.err (fun m -> m "%s" s);
         Unixfile.close_noerr fd;
         Error (`E_short s)
-    end ||| fun () -> 
-      (* check_header *) 
+    end ||| fun () ->
+      (* check_header *)
       let buf8 = Bytes.create len8 in
-      begin 
+      begin
         ignore(Unixfile.pread_all ~fd ~off:0 ~buf:buf8 ~buf_off:0 ~len:len8);
         match buf8 = header with
         | true -> Ok ()
-        | false -> 
-          let s = 
+        | false ->
+          let s =
             Printf.sprintf "%s: file %s does not have the correct \
-                            header for a log file (expected %S, got %S)" 
+                            header for a log file (expected %S, got %S)"
               (log_location __LINE__) fn (Bytes.to_string header) (Bytes.to_string buf8)
           in
           Log.err (fun m -> m "%s" s);
           Unixfile.close_noerr fd;
           Error (`E_header s)
-      end ||| fun () -> 
+      end ||| fun () ->
         (* check_ppos *)
         let buf8 = Bytes.create len8 in
         let ppos_ref = ref 0 in
-        begin 
-          ignore(Unixfile.pread_all ~fd ~off:ppos_ptr ~buf:buf8 ~buf_off:0 ~len:len8);          
+        begin
+          ignore(Unixfile.pread_all ~fd ~off:ppos_ptr ~buf:buf8 ~buf_off:0 ~len:len8);
           let ppos = bytes_to_int buf8 in
           ppos_ref := ppos;
           match ppos >= data_ptr && ppos <= fd_len with
           | true -> Ok ()
-          | false -> 
-            let s = 
+          | false ->
+            let s =
               Printf.sprintf "%s: file %s has a ppos value of %d \
                               which is beyond the length %d of the \
-                              file (or less than data_ptr)" 
+                              file (or less than data_ptr)"
                 (log_location __LINE__) fn ppos fd_len
             in
             Log.err (fun m -> m "%s" s);
             Unixfile.close_noerr fd;
             Error (`E_ppos_invalid s)
-        end ||| fun () -> 
+        end ||| fun () ->
           assert(!ppos_ref >= data_ptr);
           Ok (!ppos_ref)
 
 
   let perm = 0o640 (* user rw-x; g r-wx; o -rwx *)
-      
+
   let init_pos = data_ptr
 
   let len_65536 = 65536
@@ -248,10 +248,10 @@ module Private = struct
        contains the encoded bytes; NOTE inefficient for short strings,
        since we need 4 bytes to encode the length; could be improved
        FIXME? by using a bin_prot like encoding of strings *)
-    let output_string ~buf s = 
-      let len = String.length s in      
+    let output_string ~buf s =
+      let len = String.length s in
       assert(len <= max_string_len);
-      let buf = 
+      let buf =
         match len+4 <= Bytes.length buf with
         | true -> buf
         | false -> Bytes.create (len+4)
@@ -274,7 +274,7 @@ module Private = struct
       assert(len_buf >= 4);
       ignore(Unixfile.pread_all ~fd ~off ~buf ~buf_off:0 ~len:4 : int);
       let len = Bytes.get_int32_be buf 0 |> Int32.to_int in
-      let buf = 
+      let buf =
         match len <= len_buf with
         | true -> buf
         | false -> Bytes.create len
@@ -285,19 +285,19 @@ module Private = struct
 
     (** After reading a string from pos, return the next possible pos *)
     let next_off_delta s = 4 + String.length s
-      
+
   end
 
   module Make_w(H:HEADER) = struct
 
     let _ = assert(Bytes.length H.header = len8) (* to match length_ptr *)
 
-    type t = { 
+    type t = {
       fn          : string;
-      fd          : Unix.file_descr; 
+      fd          : Unix.file_descr;
       mutable pos : int;
       (** Position at end of the file, where we append new data. *)
-      buf         : bytes;  
+      buf         : bytes;
       (** Buffer for storing marshalled values before writing to file *)
     }
 
@@ -310,39 +310,39 @@ module Private = struct
 
     (* FIXME this is also problematic if we crash during init; so
        perhaps we need to do everything in a tmp file *)
-    let init fd = 
+    let init fd =
       write_header fd;
       write_ppos ~fd ~ppos:init_pos; (* initial ppos is init_pos = data_ptr *)
       Unixfile.fsync fd;
       ()
-    
-    let open_ ~create_excl fn = 
+
+    let open_ ~create_excl fn =
       let file_exists = Sys.file_exists fn in
-      begin match create_excl && file_exists with 
-        | true -> 
-          let s = Printf.sprintf "%s: file %s exists" 
-              (log_location __LINE__) fn 
+      begin match create_excl && file_exists with
+        | true ->
+          let s = Printf.sprintf "%s: file %s exists"
+              (log_location __LINE__) fn
           in
           Log.err (fun m -> m "%s" s);
           Error (`E_exist s)
-        | false -> Ok () 
-      end ||| fun () -> 
+        | false -> Ok ()
+      end ||| fun () ->
         begin match not create_excl && not file_exists with
-          | true -> 
+          | true ->
             (* file doesn't exist, and we didn't try to create it *)
-            let s = Printf.sprintf "%s: file %s does not exist" 
-                (log_location __LINE__) fn 
+            let s = Printf.sprintf "%s: file %s does not exist"
+                (log_location __LINE__) fn
             in
             Log.err (fun m -> m "%s" s);
             Error (`E_noent s)
-          | false -> Ok () 
-        end ||| fun () -> 
+          | false -> Ok ()
+        end ||| fun () ->
           (* at this point, if create_excl is set, then the file doesn't
              exist; so create it *)
           let fn_tmp = fn^".tmp" in
-          let fd = 
+          let fd =
             match create_excl with
-            | true -> begin 
+            | true -> begin
                 assert(not file_exists);
                 (* create the file; use a temporary file and rename over
                    original; this ensures that the reader never sees a
@@ -357,7 +357,7 @@ module Private = struct
                 (* FIXME dir sync *)
                 fd
               end
-            | false -> 
+            | false ->
               let fd = Unix.(openfile fn [O_RDWR] perm) in
               fd
           in
@@ -365,24 +365,24 @@ module Private = struct
              it is in the correct format FIXME pass fd from prev *)
           check_format_and_return_ppos ~header:H.header ~fn ~fd |> function
           | Error e -> Error e
-          | Ok ppos -> 
+          | Ok ppos ->
             assert(ppos >= data_ptr);
             Ok { fn; fd; pos=ppos; buf=Bytes.create len_65536 }
 
     let pos t = t.pos
-    
-    let append t s = 
+
+    let append t s =
       (* NOTE this seek_out redundant if we maintain invariant that the
          oc pos is always equal to t.pos *)
       assert(t.pos >= data_ptr);
       let len = Marshal_.output_string_fd ~fd:t.fd ~off:t.pos ~buf:t.buf s in
       t.pos <- t.pos + len;
-      ()  
+      ()
 
-    let flush ?(sync_after_ppos=true) t = 
+    let flush ?(sync_after_ppos=true) t =
       Unixfile.fsync t.fd;
       ignore (Unixfile.pwrite_all ~fd:t.fd ~off:ppos_ptr ~buf:(int_to_bytes t.pos) ~buf_off:0 ~len:len8);
-      (if sync_after_ppos then Unixfile.fsync t.fd);      
+      (if sync_after_ppos then Unixfile.fsync t.fd);
       ()
 
     let close t = Unixfile.close_noerr t.fd
@@ -396,9 +396,9 @@ module Private = struct
   module Make_r(H:HEADER) = struct
     let _ = assert(Bytes.length H.header = 8) (* to match length_ptr *)
 
-    type t = { 
-      fd           : Unix.file_descr; 
-      mutable ppos : int; 
+    type t = {
+      fd           : Unix.file_descr;
+      mutable ppos : int;
       (** Last ppos read from disk *)
       buf8         : bytes(*8*);
       buf          : bytes;
@@ -407,47 +407,47 @@ module Private = struct
     let open_ ?(wait=true) fn =
       begin match Sys.file_exists fn with
       | false -> (
-          match wait with 
-          | false -> 
+          match wait with
+          | false ->
             (* file doesn't exist *)
-            let s = Printf.sprintf "%s: file %s does not exist" 
-                (log_location __LINE__) fn 
+            let s = Printf.sprintf "%s: file %s does not exist"
+                (log_location __LINE__) fn
             in
             Log.err (fun m -> m "%s" s);
             Error (`E_noent s)
-          | true -> 
+          | true ->
             while not (Sys.file_exists fn) do
               Log.info (fun m -> m "Waiting 1s for file %s to be created." fn);
               Thread.delay 1.0
             done;
             Ok ())
       | true -> Ok ()
-      end ||| fun () -> 
+      end ||| fun () ->
         (* at this point, file exists; since we use the rename trick
            to create the file from the [log_file_w], it must be
            correctly initialized *)
         let fd = Unix.(openfile fn [O_RDWR] perm) in
         check_format_and_return_ppos ~header:H.header ~fn ~fd |> function
         | Error e -> Error e
-        | Ok ppos -> 
+        | Ok ppos ->
           Ok { fd; ppos; buf8=Bytes.create 8; buf=Bytes.create len_65536 }
 
     let init_pos = init_pos
 
-    let update_ppos t = 
+    let update_ppos t =
       (* read *)
       ignore(Unixfile.pread_all ~fd:t.fd ~off:ppos_ptr ~buf:t.buf8 ~buf_off:0 ~len:len8);
       (* update in t *)
-      t.ppos <- bytes_to_int t.buf8;     
+      t.ppos <- bytes_to_int t.buf8;
       ()
 
     let ppos t =
       update_ppos t;
       t.ppos
-      
-    let can_read t ~pos = 
+
+    let can_read t ~pos =
       update_ppos t;
-      !pos < t.ppos 
+      !pos < t.ppos
 
     let read t ~pos =
       assert(can_read t ~pos);
@@ -463,23 +463,23 @@ module Private = struct
     let read_from t ~pos =
       update_ppos t;
       let ppos = t.ppos in
-      [] |> Util.iter_k (fun ~k xs -> 
+      [] |> Util.iter_k (fun ~k xs ->
           match !pos < ppos with
           | false -> List.rev xs
-          | true -> 
+          | true ->
             read t ~pos |> fun x ->
             k (x::xs))
     (* NOTE on-disk ppos may be updated in the meantime *)
 
     let close t = Unixfile.close_noerr t.fd
-        
+
   end
 
-  module Log_file_r = Make_r(Header_)  
+  module Log_file_r = Make_r(Header_)
 
 end (* Private *)
 
-module Log_file_w : LOG_FILE_W = Private.Log_file_w 
+module Log_file_w : LOG_FILE_W = Private.Log_file_w
 
 module Log_file_r : LOG_FILE_R = Private.Log_file_r
 
@@ -503,7 +503,7 @@ module Test(S:sig val limit : int val fn : string end) = struct
     ()
 
   (** Wait for log file, then print entries, until limit reached *)
-  let run_reader () = 
+  let run_reader () =
     let t = Log_file_r.open_ ~wait:true fn |> discard_err in
     let n = ref 0 in
     let pos = ref Log_file_r.init_pos in
@@ -511,10 +511,10 @@ module Test(S:sig val limit : int val fn : string end) = struct
       if Log_file_r.can_read t ~pos then begin
         let xs = Log_file_r.read_from t ~pos in
         List.iter print_endline xs;
-        n:=!n + List.length xs            
+        n:=!n + List.length xs
       end
     done;
     Log_file_r.close t;
     ()
-      
+
 end
