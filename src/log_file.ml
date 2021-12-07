@@ -156,7 +156,7 @@ module Private = struct
   let ppos = 16 (* the position of ppos in memory; starts at pos 16,
                    ie at beginning of data *)
 
-  let _ = assert(Sys.int_size = 8 || failwith "Need 64bit platform")
+  let _ = assert(Sys.word_size = 64 || failwith "Need 64bit platform")
 
   let int_to_bytes i = 
     let bs = Bytes.create 8 in
@@ -347,9 +347,8 @@ module Private = struct
                 (* create the file; use a temporary file and rename over
                    original; this ensures that the reader never sees a
                    part-initialized file *)
-                let fd = Unix.(openfile fn_tmp [O_WRONLY; O_CREAT; O_EXCL] perm) in
+                let fd = Unix.(openfile fn_tmp [O_RDWR; O_CREAT; O_EXCL] perm) in
                 init fd;
-                Unixfile.close_noerr fd;
                 (* FIXME at this point we also want to flush the dir; but
                    OCaml doesn't seem to have this functionality in stdlib,
                    unless we actually open an fd on the dir itself and fsync
@@ -359,7 +358,7 @@ module Private = struct
                 fd
               end
             | false -> 
-              let fd = Unix.(openfile fn_tmp [O_WRONLY] perm) in
+              let fd = Unix.(openfile fn [O_RDWR] perm) in
               fd
           in
           (* at this point, the file definitely exists; if it was created,
@@ -427,7 +426,7 @@ module Private = struct
         (* at this point, file exists; since we use the rename trick
            to create the file from the [log_file_w], it must be
            correctly initialized *)
-        let fd = Unix.(openfile fn [O_RDONLY] perm) in
+        let fd = Unix.(openfile fn [O_RDWR] perm) in
         check_format_and_return_ppos ~header:H.header ~fn ~fd |> function
         | Error e -> Error e
         | Ok ppos -> 
