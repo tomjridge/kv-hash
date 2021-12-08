@@ -2,7 +2,7 @@
 
 This supplements the documentation in the code itself.
 
-Kv-hash is a library to implement a key-value store. Keys and values can be arbitrary strings. 
+Kv-hash is a library which implements a key-value store. Keys and values can be arbitrary strings. 
 
 For the individual components -- buckets and partitions -- we work with the int hash of a given key (so, an int key corresponding to some actual string key) and an int value (the offset of the string value in some "values file").
 
@@ -21,46 +21,61 @@ There are several concepts we need to describe:
 
 ## Architecture
 
-```
-+---------------------------------------------------------------+
-| +------------------------------------------------+            |
-| | +------------------------------+               |            |
-| | |  +-+  +-+  +-+               |               |            |
-| | |  | |  | |  | |  Buckets*     | Bucket store  |            |
-| | |  +-+  +-+  +-+  ...          |               |            |     
-| | +------------------------------+               |            |     
-| |          ^                                     |            |     
-| |          |                     +-----------+   |            |
-| |          |                     | Freelist* |   |            |
-| |          ---|                  +-----------+   |            |
-| |             |                                  |            |
-| |   +--------------------------+                 |            |
-| |   |  |  |  |  |  |  |  |  |  | Partition*      |            |
-| |   +--------------------------+                 | Nv_map_ii  |
-| +------------------------------------------------+            |
-|                                                               |
-| +--------------------------+                                  |
-| | Values*                  |                                  |
-| +--------------------------+                                  | Nv_map_ss
-+---------------------------------------------------------------+          
-                                                                           
-+-------------------------------------------------+                        
-| +-------------------------------------------+   |
-| | Log(n)*                                   |   |                        
-| +-------------------------------------------+   |
-|                                                 |                        
-| +-------------------------------------------+   |
-| | Log(n+1)*                                 |   |                        
-| +-------------------------------------------+   |
-|                                                 |
-| +----------+                                    |
-| | Control* |                                    |
-| +----------+                                    | Frontend
-+-------------------------------------------------+
-                            
+The architecture is a simple layered architecture. Effectively, each layer talks only to the layer immediately below it, but we break this to allow for the frontend to retrieve the last flushed state of various components in lower layers.
 
-Items marked by a * are backed by a file in the system
 ```
+                                                                           
+                                                                              
+  +-------------------------------------------+                               
+  | Frontend (layer 4)                        |  User-facing fast             
+  +-------------------------------------------+  KV store functionality       
+        |          |      |         |                                         
+        v          |      v         v                                         
+  +---------+      |  +--------+ +------------+                               
+  | Control |      |  | Log(n) | | Log(n+1)   |                               
+  +---------+      |  +--------+ +------------+                               
+                   |                                                          
+                   v                                                          
+  +-------------------------------------------+                               
+  | Nv_map_ss (layer 3)                       |  KV store                     
+  +-------------------------------------------+  (optimized for batch update) 
+       |                           |                                          
+       |                           v                                          
+       |                        +--------+                                    
+       |                        | Values |                                    
+       v                        +--------+                                    
+  +-------------------------------------------+                               
+  | Nv_map_ii (layer 2)                       |  Non-volatile int->int map    
+  +-------------------------------------------+                               
+      |                |                |                                     
+      v                |                v                                     
+  +-----------+        |           +----------+                               
+  | Partition |        |           | Freelist |                               
+  +-----------+        |           +----------+                               
+                       v                                                      
+  +-------------------------------------------+                               
+  | Bucket store (layer 1)                    |  A store of buckets           
+  +-------------------------------------------+  ie (int,int) bindings        
+       |            |           |                                             
+       v            v           v                                             
+  +-----------+ +-----------+ +-----------+                                   
+  | Bucket    | | Bucket    | | Bucket    |                                   
+  +-----------+ +-----------+ +-----------+                                   
+
+```
+
+(NOTE: diagram using textik, stored on gdrive as kv-hash-arch)
+
+For easy recall, we have the following table:
+
+| Layer | Layer name   | Files                                      |
+| ----- | ------------ | ------------------------------------------ |
+| 1     | Bucket store | buckets.data                               |
+| 2     | Nv_map_ii    | part_nnnn, freelist_nnnn                   |
+| 3     | Nv_map_ss    | values.data                                |
+| 4     | Frontend     | ctl.data, log_nnnn (and previous log_nnnn) |
+
+
 
 ## Converting string keys and values to integers
 
@@ -74,7 +89,7 @@ We think in terms of arbitrary keys and values, but it is important to remember 
 
 
 
-## Bucket
+## Buckets and the bucket store
 
 A bucket contains a small number of (int)key-(int)value pairs. Typically the keys are all close together, and part of some range $l_i \le k < h_i$. In our implementation, bucket keys are ints (hashes of an actual string key) and values are also ints (offsets in the "values file").
 
@@ -82,7 +97,7 @@ A bucket resides in a single block on disk. For a block size of 4096 bytes, we c
 
 We write buckets to disk at block-aligned offsets. Thus, bucket update is (we hope) atomic. The order that buckets flush to disk does not affect correctness.
 
-Adding a new kv to a bucket is fast. Searching is fast. A bucket is actually an int array, so going to/from disk is fast.
+Adding a new kv to a bucket is fast. Searching is fast. A bucket is actually a block-sized int array, so going to/from disk is fast.
 
 Sometimes, a bucket will become full. In this case, the bucket is split into two. Let's say the original range is $l_0 \le ... < h_0$. Let's say the new buckets are $b_1, b_2$. Then $l_0 = l_1, l_1 < h_1, h_1 = l_2, l_2 < h_2, h_2 = h_0$, i.e., each bucket corresponds to some subrange of the original range. 
 
@@ -98,27 +113,21 @@ l1 < h1        <- b1 subrange
 
 When this happens, we also have to update the partition (see below), with the information that $l_1$ maps to (the identifier of) $b_1$ and $l_2$ maps to  $b_2$ (previously, the partition had a mapping for $l_1$ only).
 
-Aside: We might also consider reclaiming the old bucket after splitting, and reusing it. At the moment, this functionality is not implemented. It would require some care to ensure that readers with an old partition don't misinterpret a recycled bucket as a real bucket for the old partition. For this reason, one might want to add generation numbers to buckets. An alternative would be to store the bucket range inside the bucket itself. Whatever solution is chosen, a reader would need to restart the operation if the bucket was detected to be recycled.
-
-
-
-## Bucket store
-
 A bucket store is just a collection of buckets, typically backed by a file or mmap. A freelist of free buckets that can be used at the next merge is also maintained.
 
 
 
-## Partition
+## Partition (map from key to bucket)
 
-For a given (int)key, we need to identify the corresponding bucket. This is the purpose of the partition. 
+To lookup the value for a given (int)key, we need to identify the corresponding bucket. This is the purpose of the partition. 
 
 Given the set of buckets $b_i$, a partition maps $l_i$ (the lower bound for the bucket $b_i$) to a bucket identifer (actually, the block location of the bucket on disk). A partition is implemented as a simple binary search tree, from int to int.
 
-To find the bucket for a key $k$, we locate the $l_i$ which is less than or equal to $k$, and which is the greatest such. This can be done efficiently since the partition is a binary search tree which supports this operation (NOTE we use Jane St. Base Map implementation, since OCaml's Stdlib.Map doesn't provide this operation). Thus, $l_i \le k < h_i$, and the partition maps $l_i$ to the bucket identifier for the bucket $b_i$ we want.
+To find the bucket for a key $k$, we locate the $l_i$ which is less than or equal to $k$, and which is the greatest such. This can be done efficiently since the partition is a binary search tree which supports this operation. [NOTE we use Jane St. Base Map implementation, since OCaml's Stdlib.Map doesn't provide this operation]. Thus, $l_i \le k < h_i$, and the partition maps $l_i$ to the bucket identifier for the bucket $b_i$ we want.
 
 
 
-## Non-volatile map (int -> int), aka nv-map-ii
+## nv-map-ii: a non-volatile map (int -> int)
 
 Now we have the components to build a non-volatile map from int to int. It consists of a partition and a collection of buckets (say, 10k buckets initially). Buckets are already stored on disk. When the partition changes (because of bucket splits), we can write that to disk as well. In fact, we typically perform batch operations on this non-volatile map, so we only write the partition to disk after a batch operation.
 
@@ -126,7 +135,7 @@ Now we have the components to build a non-volatile map from int to int. It consi
 
 
 
-## Non-volatile map (string -> string), aka nv-map-ss
+## nv-map-ss: a non-volatile map (string -> string)
 
 The only thing left to do is to add a wrapper round the nv-map-ii so that keys and values can be strings.
 
@@ -140,7 +149,7 @@ For the "find k" operation, we hash the key to a hash (int). We use the nv-map-i
 
 ## Frontend log rotation
 
-We prefer to execute operations against the nv-map-ss as a batch. This allows us to take advantage of any locality (perhaps we need to make multiple insertions into a bucket during a batch). We also have a requirement that operations like insert are "as fast as possible" and that concurrent readers communicate only via disk.
+We prefer to execute operations against the nv-map-ss as a batch. This allows us to take advantage of any locality (perhaps we need to make multiple insertions into a bucket during a batch). We also have a requirement that operations like insert are "as fast as possible" and that concurrent readers communicate only via disk. 
 
 For these reasons, we add a log in front of the nv-map-ss. The log records all new inserts as soon as they are made, so that readers can notice these updates in a timely fashion. Periodically the log is merged as a batch with the main store, and a new log is started. 
 
@@ -154,12 +163,18 @@ It is worth noting that the merge could be carried out by multiple processes, ea
 
 ## Control file
 
-In order to keep all processes coordinated, we maintain a control file, which consists of several integers.
+In order to keep all processes coordinated, we maintain a control file, which consists of several integers representing the states of various fields. The control file easily fits within a block, and so there is no problem with updating it atomically etc.
 
-* The current "generation"; the generation is changed every time we move to a new log file; the log file is named "log_nnnn", where nnnn is the generation number.
-* The most recent partition number; the partition is stored in a file "part_nnnn" where nnnn is the most recent partition number. FIXME perhaps we just store this in "part_nnnn" where nnnn is the latest generation, and rename from previous when not changed?
+The fields in the control file are as follows:
 
-In addition, the lookaside table is stored under filename "lookaside_nnnn", where nnnn is the current generation. FIXME TODO
+| Field              | Description                                                  |
+| ------------------ | ------------------------------------------------------------ |
+| current_log        | A mono-increasing "generation number", used to identify the current log file. For example, if current_log is 1234, then the latest log is log_1234. |
+| current_partition  | Used to identify the current partition. For example, if current_partition is 1234, then the latest partition is in file part_1234. Typically a new partition is written with whatever the current_log value is. However, since the partition is not necessarily updated on each merge, the current_partition can lag the current_log. FIXME why not just use the rename trick to update the partition? |
+| log_last_flush_pos | The position in the current_log when the last flush call to the log completed. Data upto this point is guaranteed to be on-disk. Data after this point may be lost on crash. |
+| last_merge         | The number of the last log that was successfully merged. This is used during recovery to decide whether or not to replay the merge of an old log. |
+
+* In addition, the lookaside table is stored under filename "lookaside_nnnn", where nnnn is the current generation. FIXME TODO
 
 
 
@@ -167,12 +182,14 @@ In addition, the lookaside table is stored under filename "lookaside_nnnn", wher
 
 In the standard configuration, we have the following files:
 
-* buckets.data - the potentially huge store of buckets
-* part_nnnn - a partition
-* log_nnnn - a frontend log file, prior to being merged
-* freelist_nnnn - the freelist
-* values.data - the values file (string values are converted to offsets in this file)
-* ctl.data - the control file
+| File          | Description                                                  |
+| ------------- | ------------------------------------------------------------ |
+| buckets.data  | The potentially-huge store of buckets.                       |
+| values.data   | The values file (string values are converted to integer offsets in this file); also potentially huge. |
+| ctl.data      | The control file. Small.                                     |
+| part_nnnn     | A partition file.                                            |
+| log_nnnn      | A log file.                                                  |
+| freelist_nnnn | A freelist.                                                  |
 
 
 
@@ -180,35 +197,39 @@ In the standard configuration, we have the following files:
 
 The code should provide crash consistency. Various technologies are employed:
 
-* The "rename trick" - writing data to a `file.tmp` and then renaming to `file`; for this to work correctly, we need to flush `file.tmp`; flush the containing directory; perform the rename; then flush the containing directory again.
-* The module `Log_file` contains an implementation of a crash-safe append-only file.
-* Block-sized, block-aligned writes are assumed to commit to disk atomically (but not necessarily in order).
+* Rename-trick: The "rename trick" - writing data to a `file.tmp` and then renaming to `file`; for this to work correctly, we need to flush `file.tmp`; flush the containing directory; perform the rename; then flush the containing directory again.
+* Crash-safe-log: The module `Log_file` contains an implementation of a crash-safe append-only file. (`Log_file_opt` contains an alternative "optimistic" log implementation.)
+* Block-writes: Block-sized, block-aligned writes are assumed to commit to disk atomically (but not necessarily in order).
+* Record-flush: flushed offsets for (append-only) files are recorded in the control file. Downside: to flush an individual file, we have to then also flush the control file afterwards, which is potentially expensive.
+* DB: We can use a DB like LMDB or SQLite. Compared to raw files, these are generally much slower, and there is less control eg over flushing (DB changes commit as a transaction, which includes the trailing flush). The advantage is that LMDB et al. are well-tested pieces of code.
 
 For the various files involved, we describe the technologies used to ensure crash consistency:
 
-* buckets.data: only updated using blk-aligned blk-sized writes
-* values.data: should use `Log_file` to safely append
-* ctl.data: after initial creation (which should use the rename trick to safely initialize), only the first block in the file is ever updated (the ctl fits within 1 block)
-* part_nnnn: rename trick
-* log_nnnn: uses `Log_file`
-* freelist_nnnn: rename trick
+| File           | Crash-safe technique                                         |
+| -------------- | ------------------------------------------------------------ |
+| buckets.data   | Block-writes                                                 |
+| partition.data | Rename-trick                                                 |
+| freelist.data  | Rename-trick                                                 |
+| values.data    | Record-flush (FIXME todo)                                    |
+| log_nnnn       | Record-flush (FIXME todo)                                    |
+| ctl.data       | Initialization using rename-trick (FIXME todo); block-writes (only 1 block) |
 
 The sequence of events when recovering looks as follows:
 
 1. All `.tmp` temporary files are deleted (they were created before the crash when attempting to use the rename trick)
 2. The bucket store can be opened directly.
-3. The freelist can be read from the last saved version.
-4. The partition can be read from the last saved version.
-5. The values file can be opened via `Log_file`
-6. The various log_nnnn files can be opened via `Log_file`
+3. The partition can be read from the last saved version.
+4. The freelist can be read from the last saved version.
+5. The values file can be truncated to "last flushed position" then opened.
+6. The current log_nnnn file can be truncated to "last flushed position" then opened. The previous log should be safely on disk, and what is needed is to replay the merge using this old log, if necessary.
 
 Once ctl.data exists, it is guaranteed that:
 
 1. buckets.data exists
-2. values.data exists
-3. part_nnnn exists
-4. log_nnnn and the previous log (if any) exist
-5. freelist_nnnn exists FIXME check this
+2. partition.data exists
+3. freelist.data exists FIXME check this
+4. values.data exists
+5. log_nnnn and the previous log (if any) exist
 
 Thus, once ctl.data exists, then all the files we need to recover after a crash will exist and will correctly represent a consistent state just before the crash.
 
